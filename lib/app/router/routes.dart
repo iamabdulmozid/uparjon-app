@@ -29,6 +29,11 @@ abstract final class Routes {
   static const String home = 'home';
   static const String homePath = '/home';
 
+  /// One earning category (`ads`, `surveys`, `quizzes`, `campaigns`) — the
+  /// `kind` path parameter is an `EarnTaskKind.slug`.
+  static const String earnList = 'earn-list';
+  static const String earnListPath = '/earn/:kind';
+
   /// Earning content. Each takes an `id` path parameter.
   static const String watchAd = 'watch-ad';
   static const String watchAdPath = '/earn/ads/:id';

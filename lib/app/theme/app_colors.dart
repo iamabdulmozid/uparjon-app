@@ -41,6 +41,26 @@ abstract final class AppColors {
   static const Color warning = Color(0xFFE8A13D);
   static const Color info = Color(0xFF3B82C4);
 
+  // Earning module accents (Figma "Uparjon", "Ad list", "Ad overview")
+  /// Stat figures and the progress rings — same value as [link].
+  static const Color orange = Color(0xFFFE980C);
+  static const Color blue = Color(0xFF5C8DD3);
+  static const Color blueTint = Color(0xFFF3F7FE);
+  static const Color green = Color(0xFF0F9863);
+  static const Color greenTint = Color(0xFFEFF6F2);
+
+  /// Reward amounts ("+ ৳10.00").
+  static const Color greenDeep = Color(0xFF005B3D);
+  static const Color purple = Color(0xFFA16EE6);
+  static const Color purpleTint = Color(0xFFF7F3FC);
+  static const Color amberTint = Color(0xFFFDF7E9);
+  static const Color lavenderTint = Color(0xFFF0F4FC);
+  static const Color pendingChip = Color(0xFFFEDB82);
+  static const Color dangerText = Color(0xFFDB3B44);
+
+  /// Dimmed backdrop behind the overview and status popups.
+  static const Color scrim = Color(0x66000000);
+
   /// Gradient used on primary CTAs (e.g. "Explore Uparjon").
   static const Gradient ctaGradient = LinearGradient(
     begin: Alignment.topCenter,

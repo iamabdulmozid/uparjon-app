@@ -13,7 +13,7 @@ final earnRepositoryProvider = Provider<EarnRepository>(
 );
 
 /// Talks to the campaign, ad, quiz and survey endpoints of the `02 Mobile`
-/// group.
+/// group, plus the stats the earning screens show around them.
 ///
 /// Reward-producing writes carry an `Idempotency-Key` so a retry after a
 /// dropped connection cannot credit the user twice.
@@ -155,6 +155,38 @@ class EarnRepository {
     data: {'answers': answers.map((a) => a.toJson()).toList()},
     idempotencyKey: Ids.newId(),
   );
+
+  // ------------------------------------------------------------------- stats
+
+  /// `GET /mobile/wallet/earnings-summary` — the "Today's Earning" figure on
+  /// the list screens. A wallet endpoint, read here because the earning
+  /// screens are its only consumer so far.
+  Future<EarningsSummary> earningsSummary() async {
+    final data = await _api.get('/mobile/wallet/earnings-summary');
+    return EarningsSummary.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// `GET /mobile/rewards/history` — what the user has completed, newest
+  /// first. Rewards may sit `PENDING` until fraud validation clears them.
+  Future<Paged<RewardHistoryItem>> rewardHistory({
+    int page = 0,
+    int size = 20,
+  }) async {
+    final data = await _api.get(
+      '/mobile/rewards/history',
+      queryParameters: {'page': page, 'size': size},
+    );
+    if (data is! Map) return Paged.empty();
+    return Paged.fromJson(
+      data.cast<String, dynamic>(),
+      RewardHistoryItem.fromJson,
+    );
+  }
+
+  /// `GET /mobile/tasks/daily` — today's checklist, behind the completion
+  /// ring on the earning tab.
+  Future<List<DailyTask>> dailyTasks() =>
+      _cardList('/mobile/tasks/daily', DailyTask.fromJson);
 
   // ------------------------------------------------------------------ shared
 

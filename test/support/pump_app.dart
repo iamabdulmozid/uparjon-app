@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uparjon/app/app.dart';
 import 'package:go_router/go_router.dart';
 import 'package:uparjon/app/router/app_router.dart';
+import 'package:uparjon/core/media/timed_playback.dart';
+import 'package:uparjon/core/media/video_playback.dart';
 import 'package:uparjon/core/network/api_client.dart';
 import 'package:uparjon/core/services/snackbar_service.dart';
 import 'package:uparjon/core/storage/local_store.dart';
@@ -21,6 +23,7 @@ Future<void> pumpApp(
   FakeApi? api,
   bool signedIn = false,
   bool keepSecureStorage = false,
+  Duration fakeVideoLength = const Duration(seconds: 3),
 }) async {
   await tester.binding.setSurfaceSize(kDesignSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -40,10 +43,17 @@ Future<void> pumpApp(
 
   await tester.pumpWidget(
     ProviderScope(
+      // Riverpod 3 retries failed providers with backoff; tests assert on the
+      // first outcome, so a failure must stay a failure.
+      retry: (retryCount, error) => null,
       overrides: [
         localStoreProvider.overrideWithValue(store),
         if (api != null)
           apiClientProvider.overrideWith((ref) => ApiClient(ref, dio: api.dio)),
+        // No platform player in widget tests: every ad "video" is a clock.
+        videoPlaybackFactoryProvider.overrideWithValue(
+          (url) => TimedPlayback(fakeVideoLength),
+        ),
       ],
       child: const UparjonApp(),
     ),

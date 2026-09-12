@@ -7,8 +7,10 @@ import '../../features/auth/presentation/otp_screen.dart';
 import '../../features/auth/presentation/reset_password_screen.dart';
 import '../../features/auth/presentation/signup_screen.dart';
 import '../../features/earn/presentation/campaign_screen.dart';
+import '../../features/earn/presentation/earn_task_kind.dart';
 import '../../features/earn/presentation/quiz_screen.dart';
 import '../../features/earn/presentation/survey_screen.dart';
+import '../../features/earn/presentation/task_list_screen.dart';
 import '../../features/earn/presentation/watch_ad_screen.dart';
 import '../../features/onboarding/presentation/onboarding_screen.dart';
 import '../../features/onboarding/presentation/welcome_screen.dart';
@@ -68,6 +70,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: Routes.homePath,
         name: Routes.home,
         builder: (context, state) => const AppShell(),
+      ),
+      GoRoute(
+        path: Routes.earnListPath,
+        name: Routes.earnList,
+        builder: (context, state) => TaskListScreen(
+          kind:
+              EarnTaskKind.fromSlug(state.pathParameters['kind'] ?? '') ??
+              EarnTaskKind.ads,
+        ),
       ),
       GoRoute(
         path: Routes.watchAdPath,

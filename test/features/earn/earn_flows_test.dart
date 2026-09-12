@@ -1,13 +1,45 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uparjon/app/router/routes.dart';
+import 'package:uparjon/features/earn/presentation/campaign_screen.dart';
+import 'package:uparjon/features/earn/presentation/task_list_screen.dart';
+import 'package:uparjon/features/earn/presentation/watch_ad_screen.dart';
 
 import '../../support/fake_api.dart';
 import '../../support/pump_app.dart';
 
+/// A page of items, shaped like Spring's `Page`.
+Map<String, dynamic> springPage(List<Map<String, dynamic>> items) => {
+  'content': items,
+  'number': 0,
+  'size': 20,
+  'totalElements': items.length,
+  'totalPages': items.isEmpty ? 0 : 1,
+  'first': true,
+  'last': true,
+  'empty': items.isEmpty,
+};
+
+/// Everything the earning screens read on the way to a task, so a flow test
+/// only has to add the endpoints it is about.
+Map<String, FakeReply> earnRoutes({
+  List<Map<String, dynamic>> ads = const [],
+  List<Map<String, dynamic>> campaigns = const [],
+}) => {
+  'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi'}),
+  'GET /mobile/ads/feed': rawJson(ads),
+  'GET /mobile/quizzes': rawJson([]),
+  'GET /mobile/surveys': rawJson([]),
+  'GET /mobile/campaigns': ok(springPage(campaigns)),
+  'GET /mobile/rewards/history': ok(springPage([])),
+  'GET /mobile/tasks/daily': ok([]),
+  'GET /mobile/wallet/earnings-summary': ok({'today': 0}),
+};
+
 /// Drives the reward-producing flows end to end against the fake transport,
 /// checking the request bodies the API actually requires.
 void main() {
+  /// Pushes a runner screen directly, skipping the list and its overview.
   Future<void> open(
     WidgetTester tester,
     FakeApi api,
@@ -16,67 +48,207 @@ void main() {
   ) async {
     await pumpApp(tester, api: api, signedIn: true);
     await goTo(tester, Routes.home);
-    final container = router(tester);
-    container.pushNamed(route, pathParameters: {'id': id});
+    router(tester).pushNamed(route, pathParameters: {'id': id});
     await tester.pumpAndSettle();
   }
 
+  /// Opens a category list, the screen the user starts tasks from.
+  Future<void> openList(WidgetTester tester, FakeApi api, String kind) async {
+    await pumpApp(tester, api: api, signedIn: true);
+    await goTo(tester, Routes.home);
+    router(tester).pushNamed(Routes.earnList, pathParameters: {'kind': kind});
+    await tester.pumpAndSettle();
+    expect(find.byType(TaskListScreen), findsOneWidget);
+  }
+
   group('watch ad', () {
-    FakeApi adApi() => FakeApi({
-      'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi'}),
-      'GET /mobile/ads/feed': rawJson([
-        {
-          'adId': 'ad-1',
-          'title': 'Regal Furniture',
-          'duration': 3,
-          'reward': 10,
-        },
-      ]),
-      'POST /mobile/ads/ad-1/view': ok({
-        'status': 'REWARDED',
-        'rewardEligible': true,
-        'watchedDurationSeconds': 3,
-      }),
-    });
+    const regalAd = {
+      'adId': 'ad-1',
+      'title': 'Regal Furniture',
+      'videoUrl': 'https://cdn.test/regal.mp4',
+      'duration': 3,
+      'reward': 10,
+    };
 
-    testWidgets('claims the reward only after the required watch time', (
-      tester,
-    ) async {
+    FakeApi adApi({Map<String, dynamic> ad = regalAd, FakeReply? view}) =>
+        FakeApi({
+          ...earnRoutes(ads: [ad]),
+          'POST /mobile/ads/ad-1/view':
+              view ??
+              ok({
+                'status': 'REWARDED',
+                'rewardEligible': true,
+                'watchedDurationSeconds': 3,
+              }),
+        });
+
+    testWidgets('overview → watch → verify → congratulation', (tester) async {
       final api = adApi();
-      await open(tester, api, Routes.watchAd, 'ad-1');
+      await openList(tester, api, 'ads');
 
-      expect(find.text('Regal Furniture'), findsOneWidget);
-      expect(find.text('Earn ৳10.00'), findsOneWidget);
+      await tester.tap(find.text('Regal Furniture'));
+      await tester.pumpAndSettle();
+      expect(find.text('Overview'), findsOneWidget);
+      await tester.tap(find.text('Start'));
+      await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(InkWell, 'Start Watching'));
-      await tester.pump();
-
-      // Claim is disabled until the countdown finishes.
+      expect(find.byType(WatchAdScreen), findsOneWidget);
+      expect(find.text('Watch till the end'), findsOneWidget);
       expect(api.bodyOf('POST /mobile/ads/ad-1/view'), isNull);
 
-      await tester.pump(const Duration(seconds: 3));
-      await tester.tap(find.widgetWithText(InkWell, 'Claim Reward'));
+      // The clock only runs once the user presses play, and nothing is
+      // reported until the video has actually ended.
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(api.bodyOf('POST /mobile/ads/ad-1/view'), isNull);
+
+      await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
       final body = api.bodyOf('POST /mobile/ads/ad-1/view')!;
       expect(body['watchedDurationSeconds'], 3);
       expect(body['deviceId'], isNotEmpty);
-      expect(find.text('Reward on its way'), findsOneWidget);
+      expect(
+        api.headersOf('POST /mobile/ads/ad-1/view')!['Idempotency-Key'],
+        isNotNull,
+      );
+      expect(find.text('Congratulation!'), findsOneWidget);
+
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.byType(WatchAdScreen), findsNothing);
+      expect(find.text('On going Ad'), findsOneWidget);
     });
 
-    testWidgets('sends an idempotency key so a retry cannot pay twice', (
-      tester,
-    ) async {
-      final api = adApi();
+    testWidgets('a failed view is reported as not rewarded', (tester) async {
+      final api = adApi(
+        view: ok({'status': 'FAILED', 'rewardEligible': false}),
+      );
       await open(tester, api, Routes.watchAd, 'ad-1');
 
-      await tester.tap(find.widgetWithText(InkWell, 'Start Watching'));
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
       await tester.pump(const Duration(seconds: 3));
-      await tester.tap(find.widgetWithText(InkWell, 'Claim Reward'));
       await tester.pumpAndSettle();
 
-      final headers = api.headersOf('POST /mobile/ads/ad-1/view')!;
-      expect(headers['Idempotency-Key'], isNotNull);
+      expect(find.text('Not rewarded'), findsOneWidget);
+    });
+
+    testWidgets('an ad without a video still runs a clock for its duration', (
+      tester,
+    ) async {
+      final api = adApi(
+        ad: {
+          'adId': 'ad-1',
+          'title': 'Regal Furniture',
+          'duration': 3,
+          'reward': 10,
+        },
+      );
+      await open(tester, api, Routes.watchAd, 'ad-1');
+
+      expect(find.text('Watch till the end'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      final body = api.bodyOf('POST /mobile/ads/ad-1/view')!;
+      expect(body['watchedDurationSeconds'], 3);
+      expect(find.text('Congratulation!'), findsOneWidget);
+    });
+  });
+
+  group('campaign', () {
+    const tryOurApp = {
+      'id': 'c-1',
+      'title': 'Try our app',
+      'campaignType': 'INSTALL',
+      'rewardAmount': 50,
+    };
+
+    FakeApi campaignApi({bool eligible = true, FakeReply? start}) => FakeApi({
+      ...earnRoutes(campaigns: [tryOurApp]),
+      'GET /mobile/campaigns/c-1': ok({
+        'id': 'c-1',
+        'title': 'Try our app',
+        'description': 'Install and open it once.',
+        'instructions': '1. Install the app\n2. Open it once',
+        'rewardAmount': 50,
+        'eligible': eligible,
+      }),
+      'POST /mobile/campaigns/c-1/start': start ?? ok({'sessionId': 'sess-1'}),
+      'POST /mobile/campaigns/c-1/complete': ok({'sessionId': 'sess-1'}),
+    });
+
+    testWidgets('overview → start → complete leaves the reward pending', (
+      tester,
+    ) async {
+      final api = campaignApi();
+      await openList(tester, api, 'campaigns');
+
+      await tester.tap(find.text('Try our app'));
+      await tester.pumpAndSettle();
+      expect(find.text('About this campaign'), findsOneWidget);
+      expect(find.text('Install and open it once.'), findsOneWidget);
+      expect(find.text('Install the app'), findsOneWidget);
+      expect(find.textContaining('৳50.00'), findsWidgets);
+
+      await tester.tap(find.text('Start'));
+      await tester.pumpAndSettle();
+
+      expect(api.callCount('POST /mobile/campaigns/c-1/start'), 1);
+      expect(find.byType(CampaignScreen), findsOneWidget);
+      await tester.tap(find.text('Mark as Complete'));
+      await tester.pumpAndSettle();
+
+      expect(api.callCount('POST /mobile/campaigns/c-1/complete'), 1);
+      expect(
+        api.headersOf(
+          'POST /mobile/campaigns/c-1/complete',
+        )!['Idempotency-Key'],
+        isNotNull,
+      );
+      expect(find.text('Completed!'), findsOneWidget);
+
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.byType(CampaignScreen), findsNothing);
+    });
+
+    testWidgets('an ineligible campaign is dropped from the feed', (
+      tester,
+    ) async {
+      final api = campaignApi(
+        start: apiError(
+          'CAMPAIGN_NOT_ELIGIBLE',
+          status: 403,
+          message: 'You are not eligible',
+        ),
+      );
+      await open(tester, api, Routes.campaign, 'c-1');
+
+      // Bounced back rather than left on a campaign that cannot be run.
+      expect(find.byType(CampaignScreen), findsNothing);
+      expect(find.textContaining('You are not eligible'), findsOneWidget);
+    });
+
+    testWidgets('the overview keeps Start disabled when not eligible', (
+      tester,
+    ) async {
+      await openList(tester, campaignApi(eligible: false), 'campaigns');
+
+      await tester.tap(find.text('Try our app'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('You are not eligible for this campaign right now.'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Start'));
+      await tester.pumpAndSettle();
+      // Still on the overview: nothing was started.
+      expect(find.text('Overview'), findsOneWidget);
+      expect(find.byType(CampaignScreen), findsNothing);
     });
   });
 
@@ -231,63 +403,6 @@ void main() {
 
       // Someone else can now take the slot.
       expect(api.callCount('POST /mobile/surveys/s-1/discard'), 1);
-    });
-  });
-
-  group('campaign', () {
-    testWidgets('start then complete leaves the reward pending', (
-      tester,
-    ) async {
-      final api = FakeApi({
-        'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi'}),
-        'GET /mobile/campaigns/c-1': ok({
-          'id': 'c-1',
-          'title': 'Try our app',
-          'description': 'Install and open it once.',
-          'rewardAmount': 50,
-          'eligible': true,
-        }),
-        'POST /mobile/campaigns/c-1/start': ok({'sessionId': 'sess-1'}),
-        'POST /mobile/campaigns/c-1/complete': ok({'sessionId': 'sess-1'}),
-      });
-
-      await open(tester, api, Routes.campaign, 'c-1');
-
-      expect(find.text('Try our app'), findsOneWidget);
-      await tester.tap(find.widgetWithText(InkWell, 'Start'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.widgetWithText(InkWell, 'Mark as Complete'));
-      await tester.pumpAndSettle();
-
-      expect(api.callCount('POST /mobile/campaigns/c-1/start'), 1);
-      expect(api.callCount('POST /mobile/campaigns/c-1/complete'), 1);
-      expect(find.textContaining('Reward pending review'), findsOneWidget);
-    });
-
-    testWidgets('an ineligible campaign is dropped from the feed', (
-      tester,
-    ) async {
-      final api = FakeApi({
-        'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi'}),
-        'GET /mobile/campaigns/c-1': ok({
-          'id': 'c-1',
-          'title': 'Try our app',
-          'eligible': true,
-        }),
-        'POST /mobile/campaigns/c-1/start': apiError(
-          'CAMPAIGN_NOT_ELIGIBLE',
-          status: 403,
-          message: 'You are not eligible',
-        ),
-      });
-
-      await open(tester, api, Routes.campaign, 'c-1');
-      await tester.tap(find.widgetWithText(InkWell, 'Start'));
-      await tester.pumpAndSettle();
-
-      // Bounced back rather than left on a campaign that cannot be run.
-      expect(find.text('Try our app'), findsNothing);
     });
   });
 }

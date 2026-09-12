@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,217 +8,200 @@ import '../../../app/router/routes.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/error/failure.dart';
+import '../../../core/ui/activity_tile.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
 import 'earn_providers.dart';
+import 'earn_task_kind.dart';
+import 'widgets/earn_stat_card.dart';
 import 'widgets/earn_task_card.dart';
+import 'widgets/opportunity_tile.dart';
 
-/// The Uparjon tab — everything the user can do to earn.
+/// The Uparjon tab (Figma: "Uparjon") — today's progress, the earning
+/// categories, and what the user recently earned.
 ///
-/// Ads, quizzes, surveys and campaigns each come from their own endpoint, so
-/// they load independently: one failing feed does not blank the others.
+/// Every block has its own provider, so one broken feed (staging's surveys
+/// endpoint, for instance) degrades a single tile instead of the screen.
 class EarnScreen extends ConsumerWidget {
   const EarnScreen({super.key});
 
+  static const _activityTints = [
+    AppColors.amberTint,
+    AppColors.purpleTint,
+    AppColors.lavenderTint,
+  ];
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return DefaultTabController(
-      length: 4,
-      child: Scaffold(
+    final counts = {
+      for (final kind in EarnTaskKind.values) kind: watchKindCount(ref, kind),
+    };
+    final remaining = counts.values.fold(
+      0,
+      (sum, count) => sum + (count.value ?? 0),
+    );
+    final tasks = ref.watch(dailyTasksProvider).value;
+    final completion = tasks == null ? null : _completionOf(tasks);
+    final history = ref.watch(rewardHistoryProvider);
+
+    return Scaffold(
+      backgroundColor: AppColors.creamLight,
+      appBar: AppBar(
         backgroundColor: AppColors.creamLight,
-        appBar: AppBar(
-          backgroundColor: AppColors.creamLight,
-          surfaceTintColor: Colors.transparent,
-          automaticallyImplyLeading: false,
-          centerTitle: true,
-          title: const Text(
-            'Uparjon',
-            style: TextStyle(fontSize: 18, color: AppColors.ink),
-          ),
-          // Four fixed tabs share the width: on a 412pt phone a scrollable
-          // bar pushed "Campaigns" off-screen entirely.
-          bottom: const TabBar(
-            labelColor: AppColors.charcoal,
-            unselectedLabelColor: AppColors.slate,
-            indicatorColor: AppColors.amber,
-            indicatorSize: TabBarIndicatorSize.label,
-            labelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            labelPadding: EdgeInsets.symmetric(horizontal: 4),
-            tabs: [
-              Tab(text: 'Ads'),
-              Tab(text: 'Surveys'),
-              Tab(text: 'Quizzes'),
-              Tab(text: 'Campaigns'),
-            ],
-          ),
+        surfaceTintColor: Colors.transparent,
+        automaticallyImplyLeading: false,
+        centerTitle: true,
+        title: const Text(
+          'Uparjon',
+          style: TextStyle(fontSize: 18, color: AppColors.ink),
         ),
-        body: TabBarView(
-          children: [_AdsTab(), _SurveysTab(), _QuizzesTab(), _CampaignsTab()],
+      ),
+      body: RefreshIndicator(
+        color: AppColors.amber,
+        onRefresh: () async => invalidateEarnFeeds(ref),
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: EarnStatCard(
+                        child: EarnRingStat(
+                          progress: completion ?? 0,
+                          value: completion == null
+                              ? '—'
+                              : '${(completion * 100).round()}%',
+                          label: 'Task Completed',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: EarnStatCard(
+                        child: EarnRingStat(
+                          progress: remaining > 0 ? 1 : 0,
+                          value: '$remaining',
+                          label: 'Remaining Task',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const _SectionTitle('Earning Opportunity'),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final kind in EarnTaskKind.values) ...[
+                      if (kind != EarnTaskKind.values.first)
+                        const SizedBox(width: 12),
+                      OpportunityTile(
+                        kind: kind,
+                        count: counts[kind]!,
+                        onTap: () => context.pushNamed(
+                          Routes.earnList,
+                          pathParameters: {'kind': kind.slug},
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 28),
+            const _SectionTitle('Recent Activity'),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: history.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(
+                    child: CircularProgressIndicator(color: AppColors.amber),
+                  ),
+                ),
+                error: (error, _) => EarnListState(
+                  message: error is Failure
+                      ? error.message
+                      : 'Could not load your activity.',
+                  onRetry: () => ref.invalidate(rewardHistoryProvider),
+                ),
+                data: (page) => page.items.isEmpty
+                    ? const EarnListState(
+                        message:
+                            'Nothing here yet. Complete a task and it will '
+                            'show up.',
+                      )
+                    : Column(
+                        children: [
+                          for (final (i, item) in page.items.indexed) ...[
+                            if (i > 0) const SizedBox(height: 8),
+                            ActivityTile(
+                              title: item.campaignName.isEmpty
+                                  ? 'Reward'
+                                  : item.campaignName,
+                              subtitle: item.isPending
+                                  ? 'Pending verification'
+                                  : 'Reward added to your wallet',
+                              amount:
+                                  Formatters.rewardOrNull(item.rewardAmount) ??
+                                  '',
+                              timestamp: item.rewardedAt == null
+                                  ? ''
+                                  : Formatters.activityTime(item.rewardedAt!),
+                              icon: AppAssets.iconTrophy,
+                              background:
+                                  _activityTints[i % _activityTints.length],
+                            ),
+                          ],
+                        ],
+                      ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+
+  /// Share of today's checklist targets that have been hit.
+  static double _completionOf(List<DailyTask> tasks) {
+    final target = tasks.fold(0, (sum, task) => sum + task.target);
+    if (target == 0) return 0;
+    final done = tasks.fold(
+      0,
+      (sum, task) => sum + math.min(task.progress, task.target),
+    );
+    return done / target;
+  }
 }
 
-/// Wraps a feed in pull-to-refresh with shared loading/empty/error states.
-///
-/// Takes the resolved [AsyncValue] rather than the provider itself so each
-/// tab stays responsible for its own refresh.
-class _Feed<T> extends StatelessWidget {
-  const _Feed({
-    required this.async,
-    required this.onRefresh,
-    required this.emptyMessage,
-    required this.itemBuilder,
-  });
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
 
-  final AsyncValue<List<T>> async;
-  final VoidCallback onRefresh;
-  final String emptyMessage;
-  final Widget Function(BuildContext, T) itemBuilder;
+  final String text;
 
   @override
   Widget build(BuildContext context) {
-    return RefreshIndicator(
-      color: AppColors.amber,
-      onRefresh: () async => onRefresh(),
-      child: async.when(
-        loading: () => const Center(
-          child: CircularProgressIndicator(color: AppColors.amber),
-        ),
-        error: (error, _) => ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            EarnListState(
-              message: error is Failure
-                  ? error.message
-                  : 'Could not load this list.',
-              onRetry: onRefresh,
-            ),
-          ],
-        ),
-        data: (items) => ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          children: items.isEmpty
-              ? [EarnListState(message: emptyMessage)]
-              : [for (final item in items) itemBuilder(context, item)],
-        ),
-      ),
-    );
-  }
-}
-
-class _AdsTab extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return _Feed<VideoAd>(
-      async: ref.watch(adsFeedProvider),
-      onRefresh: () => ref.invalidate(adsFeedProvider),
-      emptyMessage: 'No ads available right now.\nCheck back a little later.',
-      itemBuilder: (context, ad) => EarnTaskCard(
-        title: ad.title,
-        icon: AppAssets.iconVideo,
-        subtitle: ad.duration == null
-            ? null
-            : 'Takes approximately ${Formatters.duration(ad.duration!)}',
-        reward: Formatters.rewardOrNull(ad.reward),
-        onTap: () =>
-            context.pushNamed(Routes.watchAd, pathParameters: {'id': ad.adId}),
-      ),
-    );
-  }
-}
-
-class _SurveysTab extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return _Feed<SurveyCard>(
-      async: ref.watch(surveysProvider),
-      onRefresh: () => ref.invalidate(surveysProvider),
-      emptyMessage: 'No surveys available right now.',
-      itemBuilder: (context, survey) => EarnTaskCard(
-        title: survey.title,
-        icon: AppAssets.iconClipboard,
-        subtitle: [
-          if (survey.questionCount != null) '${survey.questionCount} questions',
-          if (survey.estimatedSeconds != null)
-            Formatters.duration(survey.estimatedSeconds!),
-        ].join(' · '),
-        reward: Formatters.rewardOrNull(survey.rewardAmount),
-        onTap: () =>
-            context.pushNamed(Routes.survey, pathParameters: {'id': survey.id}),
-      ),
-    );
-  }
-}
-
-class _QuizzesTab extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return _Feed<QuizCard>(
-      async: ref.watch(quizzesProvider),
-      onRefresh: () => ref.invalidate(quizzesProvider),
-      emptyMessage: 'No quizzes available right now.',
-      itemBuilder: (context, quiz) => EarnTaskCard(
-        title: quiz.title,
-        icon: AppAssets.menuTutorial,
-        subtitle: quiz.questionCount == null
-            ? null
-            : '${quiz.questionCount} questions',
-        reward: Formatters.rewardOrNull(quiz.rewardAmount),
-        onTap: () =>
-            context.pushNamed(Routes.quiz, pathParameters: {'id': quiz.id}),
-      ),
-    );
-  }
-}
-
-/// Campaigns arrive paged, so this tab unwraps the page before reusing [_Feed].
-class _CampaignsTab extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(campaignsProvider);
-
-    return RefreshIndicator(
-      color: AppColors.amber,
-      onRefresh: () async => ref.invalidate(campaignsProvider),
-      child: async.when(
-        loading: () => const Center(
-          child: CircularProgressIndicator(color: AppColors.amber),
-        ),
-        error: (error, _) => ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            EarnListState(
-              message: error is Failure
-                  ? error.message
-                  : 'Could not load campaigns.',
-              onRetry: () => ref.invalidate(campaignsProvider),
-            ),
-          ],
-        ),
-        data: (page) => ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          children: page.items.isEmpty
-              ? [const EarnListState(message: 'No campaigns available yet.')]
-              : [
-                  for (final campaign in page.items)
-                    EarnTaskCard(
-                      title: campaign.title,
-                      icon: AppAssets.iconTrophy,
-                      subtitle: [
-                        if (campaign.campaignType != null)
-                          campaign.campaignType!,
-                        if (campaign.estimatedSeconds != null)
-                          Formatters.duration(campaign.estimatedSeconds!),
-                      ].join(' · '),
-                      reward: Formatters.rewardOrNull(campaign.rewardAmount),
-                      onTap: () => context.pushNamed(
-                        Routes.campaign,
-                        pathParameters: {'id': campaign.id},
-                      ),
-                    ),
-                ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          color: AppColors.ink,
         ),
       ),
     );

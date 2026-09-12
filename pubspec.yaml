@@ -42,6 +42,7 @@ dependencies:
   # Flutter template) does not support yet. Revisit when AGP catches up.
   flutter_secure_storage: ^10.0.0
   flutter_svg: ^2.3.0
+  video_player: ^2.14.0
 
 dev_dependencies:
   flutter_test:
@@ -83,6 +84,7 @@ flutter:
     - assets/images/money_bag.svg
     - assets/icons/
     - assets/icons/menu/
+    - assets/illustrations/
 
   # To add custom fonts to your application, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a

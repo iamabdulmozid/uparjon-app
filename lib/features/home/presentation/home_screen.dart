@@ -4,8 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/services/snackbar_service.dart';
+import '../../../app/shell/shell_tab.dart';
 import '../../auth/presentation/auth_controller.dart';
-import 'widgets/activity_tile.dart';
+import '../../../core/ui/activity_tile.dart';
 import 'widgets/balance_card.dart';
 import 'widgets/module_tiles.dart';
 import 'widgets/promo_banner.dart';
@@ -38,11 +39,13 @@ class HomeScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 24),
             ModuleTiles(
-              onTap: (module) => SnackbarService.showInfo(
-                module == 'Uparjon'
-                    ? 'Earning tasks are coming next.'
-                    : '$module arrives in a later release.',
-              ),
+              onTap: (module) {
+                if (module == 'Uparjon') {
+                  ref.read(shellTabProvider.notifier).select(ShellTab.earn);
+                  return;
+                }
+                SnackbarService.showInfo('$module arrives in a later release.');
+              },
             ),
             const SizedBox(height: 24),
             PromoBanner(

@@ -18,6 +18,7 @@ behind our own abstraction** so it can be replaced without touching features.
 | Key-value storage | **shared_preferences** | Flutter-team maintained. Wrapped in `LocalStore`. |
 | Secure storage | **flutter_secure_storage** | Tokens only (Keystore/Keychain). Wrapped in `SecureStore`. |
 | SVG rendering | **flutter_svg** | Logo/icons are SVG exports. |
+| Video playback | **video_player** (flutter/packages), wrapped in `core/media/VideoPlayback` | Official. Ads must be watched in-app with no seeking. Screens only see the `VideoPlayback` interface; `VideoPlayerPlayback` is the single file importing the package and `TimedPlayback` (a clock) stands in for tests and for ads with no URL. |
 | Localization | Flutter's own `gen_l10n` (ARB files) | Official, no dependency. bn + en. |
 | Lints | **flutter_lints** | Official. |
 | UI components | **Custom internal UI kit** (`core/ui`) | shadcn-*inspired* (variant-driven API, design tokens), but shadcn itself is a React library and its Flutter ports are third-party and would fight the Figma design language. We own buttons/cards/inputs, themed from Figma tokens. |
@@ -45,11 +46,12 @@ lib/
 │   ├── config/                # AppEnv (dev/stage/prod via --dart-define)
 │   ├── constants/             # asset paths, durations, misc constants
 │   ├── error/                 # Failure types + exception→Failure mapping
+│   ├── media/                 # VideoPlayback interface, video_player adapter, timed fake
 │   ├── network/               # ApiClient (dio wrapper), interceptors
 │   ├── storage/               # LocalStore, SecureStore wrappers
 │   ├── utils/                 # extensions, formatters, validators
 │   ├── services/              # SnackbarService, connectivity, etc.
-│   └── ui/                    # ★ custom UI kit: AppButton, AppCard, ...
+│   └── ui/                    # ★ custom UI kit: AppButton, ActivityTile, ...
 └── features/                  # one folder per product module
     ├── splash/
     │   └── presentation/      # screens + widgets + controllers
@@ -58,7 +60,7 @@ lib/
     │   ├── data/              # models, repository (API + fake impls)
     │   └── presentation/      # login, sign up, OTP + AuthController
     ├── home/                  # dashboard
-    ├── earn/                  # ads + surveys (Phase 1 core) — placeholder
+    ├── earn/                  # Uparjon tab: landing, /earn/:kind lists, ad/campaign/quiz/survey runners
     ├── wallet/                # balance + withdrawals — placeholder
     ├── menu/                  # profile/settings — placeholder
     ├── freelance/             # Phase 2 (not created yet)
@@ -104,7 +106,10 @@ dio error ──► ErrorInterceptor ──► AppException(kind, message, statu
 
 ## 5. Assets
 
-- `assets/logo/`, `assets/icons/`, selected `assets/images/` files are bundled.
+- `assets/logo/`, `assets/icons/`, `assets/illustrations/` and selected
+  `assets/images/` files are bundled. The illustrations are the four earning
+  popups (preparing / verifying / congratulations / not rewarded) resized to
+  480px from the 1254px Figma exports that still sit in `assets/images/`.
 - `assets/svg/` holds **full-screen Figma mockup exports — design reference
   only, never bundled** (each is ~2 MB). pubspec lists only what the app uses.
 - `pubspec.yaml` bundles `assets/icons/` **wholesale**, so build-time-only
@@ -125,6 +130,16 @@ dio error ──► ErrorInterceptor ──► AppException(kind, message, statu
 
 ## 7. Testing (grows with the app)
 
+- `test/support/pump_app.dart` boots the real app against `FakeApi` (a dio
+  adapter answering from a routing table) and overrides
+  `videoPlaybackFactoryProvider` with `TimedPlayback`, so ad flows run on
+  fake time with `tester.pump(Duration)`.
+- Riverpod 3 retries failed providers with backoff; `pumpApp` passes
+  `retry: (_, _) => null` so a failing feed stays failed for assertions.
+- The test font is wide and tall: design boxes with a fixed height overflow
+  under it. Give cards a `minHeight` (and `IntrinsicHeight` rows) instead of
+  a fixed `height`, and wrap small labels in `FittedBox`.
+
 - Unit tests: repositories (mock ApiClient), Notifiers.
 - Widget tests: UI kit components + critical flows (auth, task completion).
 - Golden tests for the UI kit once tokens stabilize.
@@ -137,3 +152,56 @@ dio error ──► ErrorInterceptor ──► AppException(kind, message, statu
   workspace packages; the layering above already matches that split.
 - Bangla font (Hind Siliguri or Noto Sans Bengali) to be bundled under
   `assets/fonts/` and wired in `app_theme.dart` — pending Figma confirmation.
+
+## 9. Earning flows (ads & campaigns)
+
+Built from the Figma frames "Uparjon", "Ad list", "Ad overview", "Preparing
+Advertisement", "Watch Ad 1-5" and "Survey list/overview", against
+`docs/mobile-api-specification.md` §3, §5 and §8.
+
+```
+Uparjon tab (EarnScreen)            GET /mobile/tasks/daily      → "Task Completed" ring
+  ├─ stats                          feeds' item counts           → "Remaining Task" ring
+  ├─ Earning Opportunity tiles      ads / quizzes / surveys / campaigns counts
+  └─ Recent Activity                GET /mobile/rewards/history
+        │ tap tile
+        ▼
+/earn/:kind (TaskListScreen)        GET /mobile/wallet/earnings-summary → "Today's Earning"
+  ├─ "On going <Kind>" cards        GET /mobile/ads/feed | /quizzes | /surveys | /campaigns
+  └─ "Completed" cards              GET /mobile/rewards/history
+        │ tap card → TaskOverviewDialog (Back / Start)
+        ▼
+runner: WatchAdScreen | CampaignScreen | QuizScreen | SurveyScreen
+```
+
+- **Ads** — `WatchAdScreen` phases: preparing (player initialises; full-screen
+  "Preparing Advertisement") → watching (play/pause + mute only, no seek) →
+  verifying (`POST /mobile/ads/{id}/view` with the watched seconds and the
+  device id, idempotency-keyed) → result popup ("Congratulation!" when
+  `status == REWARDED || rewardEligible`, otherwise "Not rewarded"). The ad is
+  captured once from the feed so the feed invalidation after a view does not
+  blank the screen. An ad without a `videoUrl` runs `TimedPlayback` for its
+  `duration`; the server still verifies the time.
+- **Campaigns** — `CampaignOverviewDialog` loads `GET /mobile/campaigns/{id}`
+  inside the overview (description → "About", instructions → "Before you
+  start" bullets, `eligible` gates Start). `CampaignScreen` calls `/start` on
+  arrival, shows the run view, then `/complete`; completion only enters fraud
+  validation, so the popup says the reward lands "after verification".
+  `CAMPAIGN_NOT_ELIGIBLE` and `DUPLICATE_REQUEST` (a 403 and a 409) mean the
+  card is stale: refresh the feeds and pop.
+- **Popups** (`EarnPopup`) are drawn inside the screen's own `Stack`, not
+  pushed as routes, so a request that finishes after the user closed the
+  popup simply shows the next state.
+
+Known gaps against the design (as of 2026-09-12):
+
+- The post-video question ("What was the percentage of discount…") has no API:
+  `VideoAdDto` carries no question and there is no ad-answer endpoint. The
+  screen goes straight from the video to verification; the question slots in
+  between the watching and verifying phases once the DTO exposes it.
+- The spec's `thumbnailUrl` / `type` / `durationSeconds` names differ from the
+  live DTOs (`thumbnail` / `campaignType` / `estimatedSeconds`); models read
+  both. `/mobile/home-feed` and `/mobile/surveys` return 500 on staging, and
+  the ads and campaigns feeds are empty there.
+- "Completed" cards come from reward history, which is not filtered by task
+  type, so a survey reward also shows on the Ads list.

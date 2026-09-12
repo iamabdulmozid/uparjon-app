@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-import '../../../../app/theme/app_colors.dart';
+import '../../app/theme/app_colors.dart';
 
-/// One row of "Recent Activity" (Figma: 382x81, 8pt radius).
+/// One activity row (Figma: "Main Home" Recent Activity, "Uparjon" activity
+/// list — 382x81, 8pt radius). Shared by Home and Earn through the UI kit.
 class ActivityTile extends StatelessWidget {
   const ActivityTile({
     super.key,
@@ -61,6 +62,8 @@ class ActivityTile extends StatelessWidget {
               children: [
                 Text(
                   title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -87,7 +90,7 @@ class ActivityTile extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF005B3D),
+                  color: AppColors.greenDeep,
                 ),
               ),
               const SizedBox(height: 4),

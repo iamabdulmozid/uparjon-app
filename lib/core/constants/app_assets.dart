@@ -53,6 +53,20 @@ abstract final class AppAssets {
   static const String promoIllustration = 'assets/images/image_24.png';
   static const String moneyBag = 'assets/images/money_bag.svg';
 
+  static const String iconNotebook =
+      'assets/icons/school___notebook_bookmark.svg';
+
+  // Earning-flow popups (Figma "Preparing Advertisement", "Verifying",
+  // "Congratulation!", "Wrong Answer!"), resized from the 1254px exports.
+  static const String illustrationPreparingAd =
+      'assets/illustrations/preparing_ad.png';
+  static const String illustrationVerifying =
+      'assets/illustrations/verifying.png';
+  static const String illustrationCongratulations =
+      'assets/illustrations/congratulations.png';
+  static const String illustrationNotRewarded =
+      'assets/illustrations/not_rewarded.png';
+
   // Onboarding illustrations (exported at 3x: 1086x1448)
   static const String onboardingEarn = 'assets/images/image_26.png';
   static const String onboardingHire = 'assets/images/image_27.png';

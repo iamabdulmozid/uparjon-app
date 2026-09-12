@@ -1,7 +1,10 @@
 /// Models for the earning content types: ads, quizzes, surveys and campaigns.
 ///
-/// Field names mirror the `02 Mobile` OpenAPI DTOs. Money arrives as a number
-/// and is kept as [num] — the client never does arithmetic on it.
+/// Field names mirror the `02 Mobile` OpenAPI DTOs, which is what the live
+/// API sends. `docs/mobile-api-specification.md` names a few fields
+/// differently (`thumbnailUrl`, `type`, `durationSeconds`); those are read as
+/// fallbacks so either shape parses. Money arrives as a number and is kept as
+/// [num] — the client never does arithmetic on it.
 library;
 
 /// A Spring `Page` envelope, used by the campaign list.
@@ -29,7 +32,10 @@ class Paged<T> {
     items: (json['content'] as List? ?? [])
         .map((e) => itemFromJson((e as Map).cast<String, dynamic>()))
         .toList(),
-    page: (json['number'] as num?)?.toInt() ?? 0,
+    page:
+        (json['number'] as num?)?.toInt() ??
+        ((json['pageable'] as Map?)?['pageNumber'] as num?)?.toInt() ??
+        0,
     totalPages: (json['totalPages'] as num?)?.toInt() ?? 0,
     totalElements: (json['totalElements'] as num?)?.toInt() ?? 0,
     isLast: json['last'] as bool? ?? true,
@@ -50,6 +56,7 @@ class VideoAd {
     required this.adId,
     required this.title,
     this.videoUrl,
+    this.thumbnailUrl,
     this.duration,
     this.reward,
   });
@@ -57,18 +64,37 @@ class VideoAd {
   final String adId;
   final String title;
   final String? videoUrl;
+  final String? thumbnailUrl;
 
   /// Required watch time in seconds.
   final int? duration;
   final num? reward;
 
   factory VideoAd.fromJson(Map<String, dynamic> json) => VideoAd(
-    adId: json['adId']?.toString() ?? '',
+    adId: (json['adId'] ?? json['id'])?.toString() ?? '',
     title: json['title'] as String? ?? '',
-    videoUrl: json['videoUrl'] as String?,
-    duration: (json['duration'] as num?)?.toInt(),
-    reward: json['reward'] as num?,
+    videoUrl: (json['videoUrl'] ?? json['mediaUrl']) as String?,
+    thumbnailUrl: (json['thumbnailUrl'] ?? json['thumbnail']) as String?,
+    duration: ((json['duration'] ?? json['durationSeconds']) as num?)?.toInt(),
+    reward: (json['reward'] ?? json['rewardAmount']) as num?,
   );
+}
+
+/// Lifecycle of a recorded ad view (`AdViewResponse.status`).
+enum AdViewStatus {
+  started,
+  completed,
+  failed,
+  rewarded,
+  unknown;
+
+  static AdViewStatus parse(String? raw) => switch (raw) {
+    'STARTED' => started,
+    'COMPLETED' => completed,
+    'FAILED' => failed,
+    'REWARDED' => rewarded,
+    _ => unknown,
+  };
 }
 
 /// Result of submitting an ad view (`AdViewResponse`).
@@ -76,19 +102,31 @@ class AdView {
   const AdView({
     required this.status,
     required this.rewardEligible,
+    this.id,
+    this.adId,
     this.watchedDurationSeconds,
+    this.completedAt,
   });
 
-  final String status;
-  final bool rewardEligible;
-  final int? watchedDurationSeconds;
+  final AdViewStatus status;
 
-  bool get isRewarded => status == 'REWARDED' || rewardEligible;
+  /// The server accepted the watch as reward-worthy. Payment may still wait
+  /// on fraud validation, so this is "earned", not "credited".
+  final bool rewardEligible;
+  final String? id;
+  final String? adId;
+  final int? watchedDurationSeconds;
+  final DateTime? completedAt;
+
+  bool get isRewarded => status == AdViewStatus.rewarded || rewardEligible;
 
   factory AdView.fromJson(Map<String, dynamic> json) => AdView(
-    status: json['status'] as String? ?? '',
+    status: AdViewStatus.parse(json['status'] as String?),
     rewardEligible: json['rewardEligible'] as bool? ?? false,
+    id: json['id']?.toString(),
+    adId: json['adId']?.toString(),
     watchedDurationSeconds: (json['watchedDurationSeconds'] as num?)?.toInt(),
+    completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
   );
 }
 
@@ -115,10 +153,12 @@ class CampaignCard {
   factory CampaignCard.fromJson(Map<String, dynamic> json) => CampaignCard(
     id: json['id']?.toString() ?? '',
     title: json['title'] as String? ?? '',
-    thumbnail: json['thumbnail'] as String?,
-    campaignType: json['campaignType'] as String?,
+    thumbnail: (json['thumbnail'] ?? json['thumbnailUrl']) as String?,
+    campaignType: (json['campaignType'] ?? json['type']) as String?,
     rewardAmount: json['rewardAmount'] as num?,
-    estimatedSeconds: (json['estimatedSeconds'] as num?)?.toInt(),
+    estimatedSeconds:
+        ((json['estimatedSeconds'] ?? json['durationSeconds']) as num?)
+            ?.toInt(),
     status: json['status'] as String?,
   );
 }
@@ -151,10 +191,12 @@ class CampaignDetails {
         title: json['title'] as String? ?? '',
         eligible: json['eligible'] as bool? ?? true,
         description: json['description'] as String?,
-        image: json['image'] as String?,
+        image: (json['image'] ?? json['thumbnailUrl']) as String?,
         instructions: json['instructions'] as String?,
         rewardAmount: json['rewardAmount'] as num?,
-        estimatedDuration: (json['estimatedDuration'] as num?)?.toInt(),
+        estimatedDuration:
+            ((json['estimatedDuration'] ?? json['durationSeconds']) as num?)
+                ?.toInt(),
       );
 }
 
@@ -432,4 +474,87 @@ class SurveyAnswer {
     if (optionIds != null) 'optionIds': optionIds,
     if (textAnswer != null) 'textAnswer': textAnswer,
   };
+}
+
+/// Earnings totals (`EarningsSummaryResponse`,
+/// `GET /mobile/wallet/earnings-summary`).
+class EarningsSummary {
+  const EarningsSummary({
+    required this.today,
+    required this.thisWeek,
+    required this.thisMonth,
+    required this.lifetime,
+  });
+
+  final num today;
+  final num thisWeek;
+  final num thisMonth;
+  final num lifetime;
+
+  factory EarningsSummary.fromJson(Map<String, dynamic> json) =>
+      EarningsSummary(
+        today: json['today'] as num? ?? 0,
+        thisWeek: json['thisWeek'] as num? ?? 0,
+        thisMonth: json['thisMonth'] as num? ?? 0,
+        lifetime: json['lifetime'] as num? ?? 0,
+      );
+}
+
+/// A completed task's reward (`RewardHistoryItem`,
+/// `GET /mobile/rewards/history`). Sits `PENDING` until fraud validation
+/// clears it, then is credited to the wallet.
+class RewardHistoryItem {
+  const RewardHistoryItem({
+    required this.rewardId,
+    required this.campaignName,
+    required this.status,
+    this.rewardAmount,
+    this.rewardedAt,
+  });
+
+  final String rewardId;
+  final String campaignName;
+  final String status;
+  final num? rewardAmount;
+  final DateTime? rewardedAt;
+
+  bool get isPending => status.toUpperCase() == 'PENDING';
+
+  factory RewardHistoryItem.fromJson(Map<String, dynamic> json) =>
+      RewardHistoryItem(
+        rewardId: (json['rewardId'] ?? json['id'])?.toString() ?? '',
+        campaignName: (json['campaignName'] ?? json['title'] ?? '').toString(),
+        status: json['status'] as String? ?? '',
+        rewardAmount: (json['rewardAmount'] ?? json['amount']) as num?,
+        rewardedAt: DateTime.tryParse(
+          (json['rewardedAt'] ?? json['createdAt'] ?? '').toString(),
+        ),
+      );
+}
+
+/// One item of today's checklist (`DailyTaskDto`, `GET /mobile/tasks/daily`).
+class DailyTask {
+  const DailyTask({
+    required this.title,
+    required this.target,
+    required this.progress,
+    this.id,
+    this.reward,
+  });
+
+  final String title;
+  final int target;
+  final int progress;
+  final String? id;
+  final num? reward;
+
+  bool get completed => target > 0 && progress >= target;
+
+  factory DailyTask.fromJson(Map<String, dynamic> json) => DailyTask(
+    id: json['id']?.toString(),
+    title: json['title'] as String? ?? '',
+    target: (json['target'] as num?)?.toInt() ?? 0,
+    progress: (json['progress'] as num?)?.toInt() ?? 0,
+    reward: json['reward'] as num?,
+  );
 }
