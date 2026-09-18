@@ -76,7 +76,7 @@ Implications:
 | ADS-1 | Ad list (Figma: `ad list`, `ad overview`) shows available video/photo ads with reward amount and duration. |
 | ADS-2 | Watch flow (Figma: `watch_ad_1..5`, `preparing advertisement`): preparing state → video playback → completion verification → reward credited with confirmation. |
 | ADS-3 | An ad only pays after **verified completion** (server-side check: watch duration, focus events). Leaving early forfeits the reward. |
-| ADS-4 | Some ads include **follow-up questions about the ad**; answering correctly earns the (bonus) reward. _Status 2026-09-12: not exposed by the API (`VideoAdDto` carries no question, no answer endpoint) — the app goes straight from the video to verification until it does._ |
+| ADS-4 | Some ads include **follow-up questions about the ad**; answering correctly earns the (bonus) reward. _Status 2026-09-18: UI built (Figma V2 question → Verifying → Congratulation!/Wrong Answer!), but the API still exposes no question or answer endpoint, so it stays hidden until `VideoAdDto` carries one — see ARCHITECTURE.md._ |
 | ADS-5 | Daily caps per user (server-configured) to control payout liability. |
 
 ### 3.5 Earning — Surveys & questions

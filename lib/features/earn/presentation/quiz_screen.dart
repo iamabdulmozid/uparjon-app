@@ -3,16 +3,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/app_colors.dart';
+import '../../../core/constants/app_assets.dart';
 import '../../../core/error/failure.dart';
 import '../../../core/services/snackbar_service.dart';
 import '../../../core/ui/app_button.dart';
-import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
 import '../data/earn_repository.dart';
 import 'earn_providers.dart';
+import 'widgets/earn_popup.dart';
+import 'widgets/preparing_view.dart';
 import 'widgets/question_scaffold.dart';
 
-/// Quiz runner — one question per step, then a score screen.
+/// Quiz runner (Figma V2: "Uparjon - Loading Quiz" → "Uparjon - Quiz", with
+/// the "Alert" and "Success" popups).
+///
+/// The design also shows free-text and multi-select questions, but the quiz
+/// API only takes one option id per question, so every question renders as
+/// single choice.
 class QuizScreen extends ConsumerStatefulWidget {
   const QuizScreen({super.key, required this.quizId});
 
@@ -26,6 +33,7 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
   final Map<String, String> _answers = {};
   int _index = 0;
   bool _submitting = false;
+  bool _confirmingExit = false;
   QuizResult? _result;
 
   Future<void> _submit(QuizDetails quiz) async {
@@ -45,136 +53,155 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
     }
   }
 
+  void _confirmExit() {
+    if (_submitting) return;
+    // Nothing to lose before the quiz has loaded or once it is submitted.
+    final loaded = ref.read(quizDetailsProvider(widget.quizId)).hasValue;
+    if (!loaded || _result != null) {
+      context.pop();
+      return;
+    }
+    setState(() => _confirmingExit = true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(quizDetailsProvider(widget.quizId));
+    final loading = async.isLoading && !async.hasValue;
+    final result = _result;
 
-    return Scaffold(
-      backgroundColor: AppColors.creamLight,
-      appBar: AppBar(
+    return PopScope(
+      canPop: result != null || !async.hasValue,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _confirmExit();
+      },
+      child: Scaffold(
         backgroundColor: AppColors.creamLight,
-        surfaceTintColor: Colors.transparent,
-        title: const Text(
-          'Quiz',
-          style: TextStyle(fontSize: 18, color: AppColors.ink),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-          color: AppColors.ink,
-          onPressed: () => context.pop(),
-        ),
-      ),
-      body: async.when(
-        loading: () => const Center(
-          child: CircularProgressIndicator(color: AppColors.amber),
-        ),
-        error: (error, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              error is Failure ? error.message : 'Could not load this quiz.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.slate),
-            ),
-          ),
-        ),
-        data: (quiz) {
-          if (_result != null) {
-            return _QuizResultView(
-              result: _result!,
-              onDone: () => context.pop(),
-            );
-          }
-          if (quiz.questions.isEmpty) {
-            return const Center(
-              child: Text(
-                'This quiz has no questions yet.',
-                style: TextStyle(color: AppColors.slate),
+        appBar: loading
+            ? null
+            : AppBar(
+                backgroundColor: AppColors.creamLight,
+                surfaceTintColor: Colors.transparent,
+                centerTitle: true,
+                title: const Text(
+                  'Quiz',
+                  style: TextStyle(fontSize: 18, color: AppColors.ink),
+                ),
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                  color: AppColors.ink,
+                  onPressed: _confirmExit,
+                ),
               ),
-            );
-          }
-
-          final question = quiz.questions[_index];
-          final selected = _answers[question.id];
-          final isLast = _index == quiz.questions.length - 1;
-
-          return QuestionScaffold(
-            title: quiz.title,
-            step: _index + 1,
-            total: quiz.questions.length,
-            questionNumber: _index + 1,
-            questionText: question.text,
-            canGoBack: _index > 0,
-            canGoNext: selected != null,
-            isLast: isLast,
-            busy: _submitting,
-            onBack: () => setState(() => _index--),
-            onNext: () => isLast ? _submit(quiz) : setState(() => _index++),
-            child: Column(
-              children: [
-                for (final option in question.options)
-                  ChoiceTile(
-                    label: option.text,
-                    selected: selected == option.id,
-                    onTap: () =>
-                        setState(() => _answers[question.id] = option.id),
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            async.when(
+              loading: () => const PreparingView(
+                title: 'Loading Quiz',
+                subtitle: 'Please wait a moment',
+                illustration: AppAssets.illustrationLoadingQuiz,
+              ),
+              error: (error, _) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    error is Failure
+                        ? error.message
+                        : 'Could not load this quiz.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.slate),
                   ),
-              ],
+                ),
+              ),
+              data: (quiz) {
+                if (quiz.questions.isEmpty) {
+                  return const Center(
+                    child: Text(
+                      'This quiz has no questions yet.',
+                      style: TextStyle(color: AppColors.slate),
+                    ),
+                  );
+                }
+
+                final question = quiz.questions[_index];
+                final selected = _answers[question.id];
+                final isLast = _index == quiz.questions.length - 1;
+
+                return QuestionScaffold(
+                  title: quiz.title,
+                  step: _index + 1,
+                  total: quiz.questions.length,
+                  questionNumber: _index + 1,
+                  questionText: question.text,
+                  canGoBack: _index > 0,
+                  canGoNext: selected != null,
+                  isLast: isLast,
+                  busy: _submitting,
+                  onBack: () => setState(() => _index--),
+                  onNext: () =>
+                      isLast ? _submit(quiz) : setState(() => _index++),
+                  onFinishNow: _confirmExit,
+                  child: Column(
+                    children: [
+                      for (final option in question.options)
+                        ChoiceTile(
+                          label: option.text,
+                          selected: selected == option.id,
+                          onTap: () =>
+                              setState(() => _answers[question.id] = option.id),
+                        ),
+                    ],
+                  ),
+                );
+              },
             ),
-          );
-        },
+            if (result != null)
+              _ResultPopup(result: result, onDone: () => context.pop())
+            else if (_confirmingExit)
+              EarnPopup(
+                illustration: AppAssets.illustrationAlert,
+                title: 'Alert',
+                message:
+                    'Do you really want to finish the quiz now? If you do so '
+                    'you won’t get any reward.',
+                secondaryLabel: 'Back',
+                onSecondary: () => setState(() => _confirmingExit = false),
+                actionLabel: 'Finish Quiz',
+                actionVariant: AppButtonVariant.danger,
+                onAction: () => context.pop(),
+                onClose: () => setState(() => _confirmingExit = false),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _QuizResultView extends StatelessWidget {
-  const _QuizResultView({required this.result, required this.onDone});
+/// "Success" when the quiz paid out, otherwise the not-rewarded variant with
+/// the score.
+class _ResultPopup extends StatelessWidget {
+  const _ResultPopup({required this.result, required this.onDone});
 
   final QuizResult result;
   final VoidCallback onDone;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            result.passed ? Icons.emoji_events : Icons.replay_circle_filled,
-            size: 64,
-            color: result.passed ? AppColors.amber : AppColors.slate,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '${result.score} / ${result.totalQuestions}',
-            style: const TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.w800,
-              color: AppColors.ink,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            result.passed ? 'Well done!' : 'Not quite this time.',
-            style: const TextStyle(fontSize: 16, color: AppColors.slate),
-          ),
-          if (result.reward != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Earned ${Formatters.taka(result.reward!)}',
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF005B3D),
-              ),
-            ),
-          ],
-          const SizedBox(height: 32),
-          AppButton(label: 'Done', onPressed: onDone),
-        ],
-      ),
+    final score = '${result.score}/${result.totalQuestions}';
+    return EarnPopup(
+      illustration: result.passed
+          ? AppAssets.illustrationSuccess
+          : AppAssets.illustrationNotRewarded,
+      title: result.passed ? 'Success' : 'Not rewarded',
+      message: result.passed
+          ? 'You have successfully completed the quiz. Your reward will be '
+                'added to your wallet'
+          : "You scored $score. You didn't earn the reward this time.",
+      actionLabel: 'Continue',
+      onAction: onDone,
+      onClose: onDone,
     );
   }
 }

@@ -10,6 +10,7 @@ import '../../../core/constants/app_assets.dart';
 import '../../../core/error/failure.dart';
 import '../../../core/media/timed_playback.dart';
 import '../../../core/media/video_playback.dart';
+import '../../../core/ui/app_button.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
 import '../data/earn_repository.dart';
@@ -17,17 +18,18 @@ import 'earn_providers.dart';
 import 'widgets/earn_popup.dart';
 import 'widgets/earn_task_card.dart';
 import 'widgets/preparing_view.dart';
+import 'widgets/question_scaffold.dart';
 
-/// Watch-an-ad flow (Figma: "Preparing Advertisement" → "Watch Ad" →
-/// "Verifying" → "Congratulation!" / "Wrong Answer!").
+/// Watch-an-ad flow (Figma V2: "Loading Advertisement" → "Watch Ad" →
+/// question → "Verifying" → "Congratulation!" / "Wrong Answer!").
 ///
 /// The video cannot be skipped — the only controls are play/pause and mute.
 /// When it ends the view goes to `POST /mobile/ads/{id}/view`, which
 /// re-checks the watched duration server-side and decides on the reward.
 ///
-/// The design's post-video question is not built: `VideoAdDto` carries no
-/// question, so there is nothing to ask yet. When the API exposes one it
-/// slots in between [_Phase.watching] and [_Phase.verifying].
+/// The post-video question ([_Phase.question]) only appears for ads that
+/// carry one ([VideoAd.question]). `VideoAdDto` has none yet, so today every
+/// ad goes straight from the video to verification.
 class WatchAdScreen extends ConsumerStatefulWidget {
   const WatchAdScreen({super.key, required this.adId});
 
@@ -37,7 +39,7 @@ class WatchAdScreen extends ConsumerStatefulWidget {
   ConsumerState<WatchAdScreen> createState() => _WatchAdScreenState();
 }
 
-enum _Phase { preparing, watching, verifying, result }
+enum _Phase { preparing, watching, question, verifying, result }
 
 class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     with WidgetsBindingObserver {
@@ -48,6 +50,9 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
   AdView? _result;
   Failure? _failure;
   VideoPlaybackState? _finalState;
+
+  /// Option picked for the ad's question; null for ads without one.
+  String? _answer;
   bool _popupHidden = false;
   bool _adopting = false;
 
@@ -118,7 +123,14 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     if (!mounted) return;
     final state = _playback!.state.value;
     if (state.completed && _phase == _Phase.watching) {
-      unawaited(_verify(state));
+      if (_ad?.question != null) {
+        setState(() {
+          _phase = _Phase.question;
+          _finalState = state;
+        });
+      } else {
+        unawaited(_verify(state));
+      }
       return;
     }
     setState(() {});
@@ -138,7 +150,11 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     try {
       final view = await ref
           .read(earnRepositoryProvider)
-          .submitAdView(adId: widget.adId, watchedSeconds: watched);
+          .submitAdView(
+            adId: widget.adId,
+            watchedSeconds: watched,
+            answerOptionId: _answer,
+          );
       if (!mounted) return;
       setState(() {
         _result = view;
@@ -164,16 +180,27 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
 
     final loadError = _loadError;
     final preparing = _phase == _Phase.preparing;
+    final question = ad.question;
     final Widget body;
     if (preparing) {
       body = loadError == null
           ? const PreparingView(
-              title: 'Preparing Advertisement',
+              title: 'Loading Advertisement',
               subtitle: 'Please wait a moment',
             )
           : EarnListState(message: loadError, onRetry: _retry);
+    } else if (question != null && _phase != _Phase.watching) {
+      // Stays behind the Verifying/result popups once submitted.
+      body = _AdQuestionBody(
+        question: question,
+        selected: _answer,
+        enabled: _phase == _Phase.question,
+        onSelect: (id) => setState(() => _answer = id),
+        onBack: () => context.pop(),
+        onSubmit: () => unawaited(_verify(_finalState!)),
+      );
     } else {
-      body = _WatchBody(playback: _playback!);
+      body = _WatchBody(playback: _playback!, hasQuestion: question != null);
     }
 
     return Scaffold(
@@ -187,7 +214,9 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
             EarnPopup(
               illustration: AppAssets.illustrationVerifying,
               title: 'Verifying',
-              message: 'Please wait while we verify your view',
+              message: _answer == null
+                  ? 'Please wait while we verify your view'
+                  : 'Please wait while we verify your answer',
               onClose: () => setState(() => _popupHidden = true),
             ),
           if (_phase == _Phase.result && !_popupHidden) _resultPopup(context),
@@ -215,7 +244,7 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
       appBar: feed.hasError || missing ? _appBar(context) : null,
       body: feed.when(
         loading: () => const PreparingView(
-          title: 'Preparing Advertisement',
+          title: 'Loading Advertisement',
           subtitle: 'Please wait a moment',
         ),
         error: (error, _) => EarnListState(
@@ -225,7 +254,7 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
         data: (_) => found == null
             ? const EarnListState(message: 'This ad is no longer available.')
             : const PreparingView(
-                title: 'Preparing Advertisement',
+                title: 'Loading Advertisement',
                 subtitle: 'Please wait a moment',
               ),
       ),
@@ -266,15 +295,26 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     }
 
     final rewarded = _result?.isRewarded ?? false;
+    final answered = _answer != null;
     return EarnPopup(
       illustration: rewarded
           ? AppAssets.illustrationCongratulations
           : AppAssets.illustrationNotRewarded,
-      title: rewarded ? 'Congratulation!' : 'Not rewarded',
-      message: rewarded
-          ? 'You watched the full ad. Your reward will be added to your '
-                'wallet after verification.'
-          : "This view didn't qualify for a reward this time.",
+      title: rewarded
+          ? 'Congratulation!'
+          : answered
+          ? 'Wrong Answer!'
+          : 'Not rewarded',
+      message: switch ((rewarded, answered)) {
+        (true, true) =>
+          'Your answer is correct. Your reward will be added to your wallet',
+        (true, false) =>
+          'You watched the full ad. Your reward will be added to your '
+              'wallet after verification.',
+        (false, true) =>
+          'Your answer is not correct. You didn’t earn the reward this time.',
+        (false, false) => "This view didn't qualify for a reward this time.",
+      },
       actionLabel: 'Continue',
       onAction: () => context.pop(),
       onClose: () => context.pop(),
@@ -283,9 +323,10 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
 }
 
 class _WatchBody extends StatelessWidget {
-  const _WatchBody({required this.playback});
+  const _WatchBody({required this.playback, required this.hasQuestion});
 
   final VideoPlayback playback;
+  final bool hasQuestion;
 
   @override
   Widget build(BuildContext context) {
@@ -294,25 +335,114 @@ class _WatchBody extends StatelessWidget {
       child: Column(
         children: [
           _Player(playback: playback),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           const Text(
             'Watch till the end',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
+              fontSize: 24,
+              fontWeight: FontWeight.w600,
               color: AppColors.ink,
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Watch the full video without skipping. Your reward is verified '
-            'as soon as it ends.',
+          const SizedBox(height: 16),
+          Text(
+            hasQuestion
+                ? 'After the video, a question will appear. To earn the '
+                      'reward you need to answer the question correctly.'
+                : 'Watch the full video without skipping. Your reward is '
+                      'verified as soon as it ends.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, height: 1.5, color: AppColors.slate),
+            style: const TextStyle(
+              fontSize: 14,
+              height: 1.4,
+              color: AppColors.slate,
+            ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The post-video question (Figma V2 "Uparjon - Watch Ad", Component 19):
+/// one answer, then Submit. Back leaves without claiming the reward.
+class _AdQuestionBody extends StatelessWidget {
+  const _AdQuestionBody({
+    required this.question,
+    required this.selected,
+    required this.enabled,
+    required this.onSelect,
+    required this.onBack,
+    required this.onSubmit,
+  });
+
+  final AdQuestion question;
+  final String? selected;
+  final bool enabled;
+  final ValueChanged<String> onSelect;
+  final VoidCallback onBack;
+  final VoidCallback onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(28, 20, 28, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  question.text,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                    color: AppColors.ink,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: AppColors.border),
+                const SizedBox(height: 16),
+                for (final option in question.options)
+                  ChoiceTile(
+                    label: option.text,
+                    selected: selected == option.id,
+                    onTap: () {
+                      if (enabled) onSelect(option.id);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(28, 8, 28, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: AppButton(
+                    label: 'Back',
+                    variant: AppButtonVariant.soft,
+                    onPressed: enabled ? onBack : null,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: AppButton(
+                    label: 'Submit',
+                    onPressed: enabled && selected != null ? onSubmit : null,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -405,8 +535,8 @@ class _PlayButton extends StatelessWidget {
       button: true,
       label: completed ? 'Finished' : 'Play',
       child: Container(
-        width: 54,
-        height: 54,
+        width: 60,
+        height: 60,
         decoration: BoxDecoration(
           color: const Color(0xCC3C3C43),
           borderRadius: BorderRadius.circular(8),

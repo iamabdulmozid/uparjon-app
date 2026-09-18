@@ -196,9 +196,12 @@ runner: WatchAdScreen | CampaignScreen | QuizScreen | SurveyScreen
 Known gaps against the design (as of 2026-09-12):
 
 - The post-video question ("What was the percentage of discount…") has no API:
-  `VideoAdDto` carries no question and there is no ad-answer endpoint. The
-  screen goes straight from the video to verification; the question slots in
-  between the watching and verifying phases once the DTO exposes it.
+  `VideoAdDto` carries no question and there is no ad-answer endpoint. The UI
+  is built (2026-09-18): an ad with a `question` (`{id, questionText,
+  options[{id, optionText}]}`, a provisional shape parsed by
+  `AdQuestion.tryParse`) gets a question phase after the video, and the picked
+  option goes out as `answerOptionId` on `POST /mobile/ads/{id}/view`. Until
+  the backend sends one, every ad skips straight to verification.
 - The spec's `thumbnailUrl` / `type` / `durationSeconds` names differ from the
   live DTOs (`thumbnail` / `campaignType` / `estimatedSeconds`); models read
   both. `/mobile/home-feed` and `/mobile/surveys` return 500 on staging, and

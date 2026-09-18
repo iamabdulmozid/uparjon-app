@@ -14,6 +14,9 @@ enum AppButtonVariant {
   soft,
   outline,
   ghost,
+
+  /// Solid red for destructive confirmations (e.g. "Finish Survey").
+  danger,
 }
 
 /// Brand button — the workhorse of the internal UI kit.
@@ -28,6 +31,7 @@ class AppButton extends StatelessWidget {
     this.variant = AppButtonVariant.primary,
     this.expanded = true,
     this.loading = false,
+    this.dense = false,
   });
 
   final String label;
@@ -38,33 +42,43 @@ class AppButton extends StatelessWidget {
   final bool expanded;
   final bool loading;
 
+  /// The shorter 35pt height used inside popups.
+  final bool dense;
+
   static const double _height = 51;
+  static const double _denseHeight = 35;
 
   @override
   Widget build(BuildContext context) {
     final enabled = onPressed != null && !loading;
     final effectiveOnPressed = enabled ? onPressed : null;
 
+    final height = dense ? _denseHeight : _height;
+    final foreground = variant == AppButtonVariant.danger
+        ? AppColors.white
+        : AppColors.charcoal;
+
     final child = loading
-        ? const SizedBox.square(
-            dimension: 22,
+        ? SizedBox.square(
+            dimension: dense ? 18 : 22,
             child: CircularProgressIndicator(
               strokeWidth: 2.5,
-              color: AppColors.charcoal,
+              color: foreground,
             ),
           )
         : Text(
             label,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: AppColors.charcoal,
+            style: TextStyle(
+              fontSize: dense ? 14 : 16,
+              fontWeight: dense ? FontWeight.w600 : FontWeight.w700,
+              color: foreground,
             ),
           );
 
     final button = switch (variant) {
       AppButtonVariant.primary => _FilledButton(
         gradient: AppColors.primaryGradient,
+        height: height,
         onPressed: effectiveOnPressed,
         child: child,
       ),
@@ -80,13 +94,22 @@ class AppButton extends StatelessWidget {
       AppButtonVariant.soft => _FilledButton(
         gradient: AppColors.softGradient,
         border: const BorderSide(color: Color(0x66FFD54F)),
+        height: height,
+        onPressed: effectiveOnPressed,
+        child: child,
+      ),
+      AppButtonVariant.danger => _FilledButton(
+        gradient: const LinearGradient(
+          colors: [AppColors.danger, AppColors.danger],
+        ),
+        height: height,
         onPressed: effectiveOnPressed,
         child: child,
       ),
       AppButtonVariant.outline => OutlinedButton(
         onPressed: effectiveOnPressed,
         style: OutlinedButton.styleFrom(
-          minimumSize: const Size.fromHeight(_height),
+          minimumSize: Size.fromHeight(height),
           side: const BorderSide(color: AppColors.amber, width: 1.5),
           foregroundColor: AppColors.charcoal,
           shape: const StadiumBorder(),

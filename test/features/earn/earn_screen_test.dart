@@ -161,7 +161,7 @@ void main() {
       expect(find.text('Takes approximate 3 min'), findsOneWidget);
       expect(find.text('+ ৳10.00'), findsOneWidget);
       expect(
-        find.text('Completed this task successfully! and earned ৳10.00'),
+        find.text('Completed this ad successfully! and earned ৳10.00'),
         findsOneWidget,
       );
     });

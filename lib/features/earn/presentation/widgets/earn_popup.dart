@@ -4,7 +4,7 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../../core/ui/app_button.dart';
 
 /// Illustrated status card over a dimmed screen (Figma: "Verifying",
-/// "Congratulation!", "Wrong Answer!").
+/// "Congratulation!", "Wrong Answer!", and V2's "Success" / "Alert").
 ///
 /// Drawn inside the screen's own [Stack] rather than pushed as a route, so
 /// the screen keeps control of its phases: a request that finishes after the
@@ -17,6 +17,9 @@ class EarnPopup extends StatelessWidget {
     required this.message,
     this.actionLabel,
     this.onAction,
+    this.actionVariant = AppButtonVariant.primary,
+    this.secondaryLabel,
+    this.onSecondary,
     this.onClose,
   });
 
@@ -25,6 +28,11 @@ class EarnPopup extends StatelessWidget {
   final String message;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final AppButtonVariant actionVariant;
+
+  /// Low-emphasis button drawn left of the action (V2 "Alert": Back).
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
   final VoidCallback? onClose;
 
   @override
@@ -37,11 +45,11 @@ class EarnPopup extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 28),
               child: Material(
-                color: Colors.white,
+                color: AppColors.creamLight,
                 borderRadius: BorderRadius.circular(12),
                 clipBehavior: Clip.antiAlias,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
+                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -64,8 +72,8 @@ class EarnPopup extends StatelessWidget {
                         title,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w600,
                           color: AppColors.ink,
                         ),
                       ),
@@ -81,7 +89,30 @@ class EarnPopup extends StatelessWidget {
                       ),
                       if (actionLabel != null) ...[
                         const SizedBox(height: 24),
-                        AppButton(label: actionLabel!, onPressed: onAction),
+                        Row(
+                          children: [
+                            if (secondaryLabel != null) ...[
+                              SizedBox(
+                                width: 100,
+                                child: AppButton(
+                                  label: secondaryLabel!,
+                                  variant: AppButtonVariant.soft,
+                                  dense: true,
+                                  onPressed: onSecondary,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                            ],
+                            Expanded(
+                              child: AppButton(
+                                label: actionLabel!,
+                                variant: actionVariant,
+                                dense: true,
+                                onPressed: onAction,
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ],
                   ),

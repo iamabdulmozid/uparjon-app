@@ -74,7 +74,7 @@ class TaskListScreen extends ConsumerWidget {
                         value: items.value == null
                             ? '—'
                             : Formatters.twoDigits(items.value!.length),
-                        label: 'Remaining ${kind.noun}',
+                        label: kind.countLabel,
                       ),
                     ),
                   ),
@@ -82,7 +82,7 @@ class TaskListScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 24),
-            _Heading('On going ${kind.noun}'),
+            _Heading(kind.listHeading),
             const SizedBox(height: 12),
             ...items.when<List<Widget>>(
               // After a task completes the feeds are invalidated; keep the
@@ -129,7 +129,10 @@ class TaskListScreen extends ConsumerWidget {
                       ? 'Reward'
                       : reward.campaignName,
                   pending: reward.isPending,
-                  message: _completedMessage(reward),
+                  message: _completedMessage(kind, reward),
+                  icon: kind.icon,
+                  color: kind.color,
+                  tint: kind.tint,
                 ),
             ],
           ],
@@ -138,16 +141,17 @@ class TaskListScreen extends ConsumerWidget {
     );
   }
 
-  static String _completedMessage(RewardHistoryItem reward) {
+  static String _completedMessage(EarnTaskKind kind, RewardHistoryItem reward) {
     final amount = reward.rewardAmount;
+    final noun = kind.noun.toLowerCase();
     if (reward.isPending) {
       return amount == null
           ? 'Completed! Your reward is pending verification'
           : 'Completed! ${Formatters.taka(amount)} is pending verification';
     }
     return amount == null
-        ? 'Completed this task successfully!'
-        : 'Completed this task successfully! and earned '
+        ? 'Completed this $noun successfully!'
+        : 'Completed this $noun successfully! and earned '
               '${Formatters.taka(amount)}';
   }
 
@@ -219,15 +223,18 @@ class _TaskItem {
         kind: EarnTaskKind.ads,
         title: ad.title,
         sections: [
-          const OverviewSection(
+          OverviewSection(
             'Before you start',
             bullets: [
               'Watch the video till the end',
+              if (ad.question != null) 'Answer the question correctly.',
               "You can't skip the video",
             ],
           ),
           rewardSection(
-            lead: 'Watch the full video to receive',
+            lead: ad.question == null
+                ? 'Watch the full video to receive'
+                : 'Answer all the questions correctly to receive',
             amount: ad.reward,
             tail: 'The reward will be added to your wallet after verification',
           ),
@@ -304,21 +311,16 @@ class _TaskItem {
           kind: EarnTaskKind.quizzes,
           title: quiz.title,
           sections: [
-            if (count != null)
-              OverviewSection(
-                'About this quiz',
-                text: 'There will be $count questions.',
-              ),
             const OverviewSection(
               'Before you start',
               bullets: [
-                'Read each question carefully',
-                'Pick one answer per question',
-                'You cannot change your answers after submission',
+                'Each question has one correct answer',
+                'You can not change your answer later',
+                'Complete the quiz in one session',
               ],
             ),
             rewardSection(
-              lead: 'Answer the questions correctly to receive',
+              lead: 'Answer all the questions correctly to receive',
               amount: quiz.rewardAmount,
               tail:
                   'The reward will be added to your wallet after verification',

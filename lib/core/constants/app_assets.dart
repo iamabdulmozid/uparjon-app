@@ -56,16 +56,27 @@ abstract final class AppAssets {
   static const String iconNotebook =
       'assets/icons/school___notebook_bookmark.svg';
 
-  // Earning-flow popups (Figma "Preparing Advertisement", "Verifying",
-  // "Congratulation!", "Wrong Answer!"), resized from the 1254px exports.
-  static const String illustrationPreparingAd =
-      'assets/illustrations/preparing_ad.png';
+  // Loading screens (Figma V2 "Loading Advertisement" / "Loading Survey" /
+  // "Loading Quiz"), cropped to the 160pt frame and saved at 3x.
+  static const String illustrationLoadingAd =
+      'assets/illustrations/loading_ads.png';
+  static const String illustrationLoadingSurvey =
+      'assets/illustrations/loading_survey.png';
+  static const String illustrationLoadingQuiz =
+      'assets/illustrations/loading_quiz.png';
+
+  // Earning-flow popups (Figma "Verifying", "Congratulation!",
+  // "Wrong Answer!"), resized from the 1254px exports.
   static const String illustrationVerifying =
       'assets/illustrations/verifying.png';
   static const String illustrationCongratulations =
       'assets/illustrations/congratulations.png';
   static const String illustrationNotRewarded =
       'assets/illustrations/not_rewarded.png';
+
+  // Survey/quiz popups (Figma V2 "Success", "Alert" — image 58 / image 56).
+  static const String illustrationSuccess = 'assets/illustrations/success.png';
+  static const String illustrationAlert = 'assets/illustrations/alert.png';
 
   // Onboarding illustrations (exported at 3x: 1086x1448)
   static const String onboardingEarn = 'assets/images/image_26.png';

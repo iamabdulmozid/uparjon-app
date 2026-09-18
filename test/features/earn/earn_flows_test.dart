@@ -156,6 +156,69 @@ void main() {
       expect(body['watchedDurationSeconds'], 3);
       expect(find.text('Congratulation!'), findsOneWidget);
     });
+
+    group('with a follow-up question', () {
+      const quizAd = {
+        ...regalAd,
+        'question': {
+          'id': 'aq-1',
+          'questionText': 'What was the percentage of discount on the Ad?',
+          'options': [
+            {'id': 'p10', 'optionText': '10%'},
+            {'id': 'p15', 'optionText': '15%'},
+          ],
+        },
+      };
+
+      testWidgets('asks after the video and sends the answer', (tester) async {
+        final api = adApi(ad: quizAd);
+        await open(tester, api, Routes.watchAd, 'ad-1');
+
+        expect(
+          find.textContaining('After the video, a question will appear'),
+          findsOneWidget,
+        );
+        await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pumpAndSettle();
+
+        // The view is only reported once the question is answered.
+        expect(
+          find.text('What was the percentage of discount on the Ad?'),
+          findsOneWidget,
+        );
+        expect(api.bodyOf('POST /mobile/ads/ad-1/view'), isNull);
+
+        await tester.tap(find.text('15%'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(InkWell, 'Submit'));
+        await tester.pumpAndSettle();
+
+        final body = api.bodyOf('POST /mobile/ads/ad-1/view')!;
+        expect(body['watchedDurationSeconds'], 3);
+        expect(body['answerOptionId'], 'p15');
+        expect(find.text('Congratulation!'), findsOneWidget);
+        expect(find.textContaining('Your answer is correct'), findsOneWidget);
+      });
+
+      testWidgets('a rejected answer shows Wrong Answer!', (tester) async {
+        final api = adApi(
+          ad: quizAd,
+          view: ok({'status': 'FAILED', 'rewardEligible': false}),
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+
+        await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('10%'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(InkWell, 'Submit'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Wrong Answer!'), findsOneWidget);
+      });
+    });
   });
 
   group('campaign', () {
@@ -308,8 +371,47 @@ void main() {
         {'questionId': 'q1', 'optionId': 'o1'},
         {'questionId': 'q2', 'optionId': 'o3'},
       ]);
-      expect(find.text('2 / 2'), findsOneWidget);
-      expect(find.text('Earned ৳20.00'), findsOneWidget);
+      expect(find.text('Success'), findsOneWidget);
+      expect(
+        find.textContaining('successfully completed the quiz'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Finish Now asks before abandoning the quiz', (tester) async {
+      final api = FakeApi({
+        'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi'}),
+        'GET /mobile/quizzes/q-1': ok({
+          'id': 'q-1',
+          'title': 'General knowledge',
+          'questions': [
+            {
+              'id': 'q1',
+              'questionText': 'Capital of Bangladesh?',
+              'options': [
+                {'id': 'o1', 'optionText': 'Dhaka'},
+              ],
+            },
+          ],
+        }),
+      });
+      await open(tester, api, Routes.quiz, 'q-1');
+
+      await tester.tap(find.text('Finish Now'));
+      await tester.pumpAndSettle();
+      expect(find.text('Alert'), findsOneWidget);
+
+      // Back keeps the user in the quiz.
+      await tester.tap(find.widgetWithText(InkWell, 'Back').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Alert'), findsNothing);
+      expect(find.text('Capital of Bangladesh?'), findsOneWidget);
+
+      await tester.tap(find.text('Finish Now'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Finish Quiz'));
+      await tester.pumpAndSettle();
+      expect(find.text('Capital of Bangladesh?'), findsNothing);
     });
   });
 
@@ -391,7 +493,11 @@ void main() {
         {'questionId': 'q2', 'textAnswer': '4'},
         {'questionId': 'q3', 'textAnswer': 'Tasty'},
       ]);
-      expect(find.text('Survey submitted'), findsOneWidget);
+      expect(find.text('Success'), findsOneWidget);
+      expect(
+        find.textContaining('successfully completed the survey'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('releases the slot when the user backs out', (tester) async {
@@ -399,6 +505,13 @@ void main() {
       await open(tester, api, Routes.survey, 's-1');
 
       await tester.tap(find.byIcon(Icons.arrow_back_ios_new));
+      await tester.pumpAndSettle();
+
+      // Leaving is confirmed first; the slot stays held until then.
+      expect(find.text('Alert'), findsOneWidget);
+      expect(api.callCount('POST /mobile/surveys/s-1/discard'), 0);
+
+      await tester.tap(find.text('Finish Survey'));
       await tester.pumpAndSettle();
 
       // Someone else can now take the slot.

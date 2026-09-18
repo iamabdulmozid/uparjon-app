@@ -16,6 +16,8 @@ enum EarnTaskKind {
     color: AppColors.blue,
     tint: AppColors.blueTint,
     emptyMessage: 'No ads available right now.\nCheck back a little later.',
+    countLabel: 'Remaining Ad',
+    listHeading: 'On going Ad',
   ),
   quizzes(
     slug: 'quizzes',
@@ -26,6 +28,8 @@ enum EarnTaskKind {
     color: AppColors.green,
     tint: AppColors.greenTint,
     emptyMessage: 'No quizzes available right now.',
+    countLabel: 'Quiz Available',
+    listHeading: 'Available Quiz',
   ),
   surveys(
     slug: 'surveys',
@@ -36,6 +40,8 @@ enum EarnTaskKind {
     color: AppColors.purple,
     tint: AppColors.purpleTint,
     emptyMessage: 'No surveys available right now.',
+    countLabel: 'Remaining Survey',
+    listHeading: 'On going survey',
   ),
   campaigns(
     slug: 'campaigns',
@@ -46,6 +52,8 @@ enum EarnTaskKind {
     color: AppColors.amber,
     tint: AppColors.amberTint,
     emptyMessage: 'No campaigns available yet.',
+    countLabel: 'Remaining Campaign',
+    listHeading: 'On going Campaign',
   );
 
   const EarnTaskKind({
@@ -57,6 +65,8 @@ enum EarnTaskKind {
     required this.color,
     required this.tint,
     required this.emptyMessage,
+    required this.countLabel,
+    required this.listHeading,
   });
 
   /// Route segment, e.g. `/earn/ads`.
@@ -65,13 +75,19 @@ enum EarnTaskKind {
   /// Tile and app-bar title ("Ads", "Survey").
   final String title;
 
-  /// Singular used in "On going Ad" / "Remaining Ad".
+  /// Singular used in the completed-task copy ("Completed this ad ...").
   final String noun;
   final String subtitle;
   final String icon;
   final Color color;
   final Color tint;
   final String emptyMessage;
+
+  /// The list screen's second stat ("Remaining Survey", "Quiz Available").
+  final String countLabel;
+
+  /// Heading over the open tasks ("On going survey", "Available Quiz").
+  final String listHeading;
 
   static EarnTaskKind? fromSlug(String slug) =>
       values.where((kind) => kind.slug == slug).firstOrNull;

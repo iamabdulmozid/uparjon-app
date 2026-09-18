@@ -3,13 +3,14 @@ import 'package:flutter/material.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../core/constants/app_assets.dart';
 
-/// Full-screen wait state (Figma: "Preparing Advertisement").
+/// Full-screen wait state (Figma V2: "Uparjon - Loading Advertisement",
+/// "Loading Survey", "Loading Quiz").
 class PreparingView extends StatelessWidget {
   const PreparingView({
     super.key,
     required this.title,
     required this.subtitle,
-    this.illustration = AppAssets.illustrationPreparingAd,
+    this.illustration = AppAssets.illustrationLoadingAd,
   });
 
   final String title;
@@ -28,17 +29,17 @@ class PreparingView extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Image.asset(illustration, width: 160, height: 160),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
                 Text(
                   title,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
                     color: AppColors.ink,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
                 Text(
                   subtitle,
                   textAlign: TextAlign.center,

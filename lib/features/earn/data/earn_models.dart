@@ -59,6 +59,7 @@ class VideoAd {
     this.thumbnailUrl,
     this.duration,
     this.reward,
+    this.question,
   });
 
   final String adId;
@@ -70,6 +71,11 @@ class VideoAd {
   final int? duration;
   final num? reward;
 
+  /// Follow-up question asked once the video ends (PRD ADS-4, Figma V2
+  /// "Uparjon - Watch Ad"). `VideoAdDto` does not carry one yet, so this is
+  /// null today and the flow goes straight from the video to verification.
+  final AdQuestion? question;
+
   factory VideoAd.fromJson(Map<String, dynamic> json) => VideoAd(
     adId: (json['adId'] ?? json['id'])?.toString() ?? '',
     title: json['title'] as String? ?? '',
@@ -77,7 +83,45 @@ class VideoAd {
     thumbnailUrl: (json['thumbnailUrl'] ?? json['thumbnail']) as String?,
     duration: ((json['duration'] ?? json['durationSeconds']) as num?)?.toInt(),
     reward: (json['reward'] ?? json['rewardAmount']) as num?,
+    question: AdQuestion.tryParse(json['question']),
   );
+}
+
+/// A single-answer question about an ad.
+///
+/// Provisional shape — the API has no ad question yet. Parsing mirrors the
+/// quiz DTOs (`questionText`, `options[].optionText`) so the backend can
+/// reuse them; adjust here once `VideoAdDto` is extended.
+class AdQuestion {
+  const AdQuestion({
+    required this.id,
+    required this.text,
+    required this.options,
+  });
+
+  final String id;
+  final String text;
+  final List<QuizOption> options;
+
+  /// Null unless [raw] is a question with at least one option.
+  static AdQuestion? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final json = raw.cast<String, dynamic>();
+    final options = [
+      for (final option in json['options'] as List? ?? const [])
+        if (option is Map)
+          QuizOption(
+            id: option['id']?.toString() ?? '',
+            text: (option['optionText'] ?? option['text']) as String? ?? '',
+          ),
+    ];
+    if (options.isEmpty) return null;
+    return AdQuestion(
+      id: json['id']?.toString() ?? '',
+      text: (json['questionText'] ?? json['text']) as String? ?? '',
+      options: options,
+    );
+  }
 }
 
 /// Lifecycle of a recorded ad view (`AdViewResponse.status`).

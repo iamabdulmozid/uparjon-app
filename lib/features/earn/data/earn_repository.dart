@@ -80,13 +80,22 @@ class EarnRepository {
       _cardList('/mobile/ads/feed', VideoAd.fromJson);
 
   /// `POST /mobile/ads/{id}/view` — records a watch and claims the reward.
+  ///
+  /// [answerOptionId] is the option picked for the ad's follow-up question.
+  /// `MobileAdViewRequest` has no such field yet; it is only sent for ads
+  /// that carry a question, which none do until the API adds them.
   Future<AdView> submitAdView({
     required String adId,
     required int watchedSeconds,
+    String? answerOptionId,
   }) async {
     final data = await _api.post(
       '/mobile/ads/$adId/view',
-      data: {'watchedDurationSeconds': watchedSeconds, 'deviceId': _device.id},
+      data: {
+        'watchedDurationSeconds': watchedSeconds,
+        'deviceId': _device.id,
+        'answerOptionId': ?answerOptionId,
+      },
       idempotencyKey: Ids.newId(),
     );
     return AdView.fromJson((data as Map).cast<String, dynamic>());

@@ -106,19 +106,26 @@ class EarnTaskCard extends StatelessWidget {
   }
 }
 
-/// A finished task (Figma: tinted card with a check badge and the earned
-/// amount). [pending] rewards are still in fraud validation.
+/// A finished task (Figma: card tinted in the category colour with a check
+/// badge and the earned amount). [pending] rewards are still in fraud
+/// validation.
 class CompletedTaskCard extends StatelessWidget {
   const CompletedTaskCard({
     super.key,
     required this.title,
     required this.message,
     this.pending = false,
+    this.icon = AppAssets.iconClipboard,
+    this.color = AppColors.blue,
+    this.tint = AppColors.blueTint,
   });
 
   final String title;
   final String message;
   final bool pending;
+  final String icon;
+  final Color color;
+  final Color tint;
 
   @override
   Widget build(BuildContext context) {
@@ -126,7 +133,7 @@ class CompletedTaskCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.blueTint,
+        color: tint,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -135,11 +142,7 @@ class CompletedTaskCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _IconBadge(
-                icon: AppAssets.iconClipboard,
-                color: AppColors.blue,
-                background: Colors.white,
-              ),
+              _IconBadge(icon: icon, color: color, background: Colors.white),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -157,7 +160,7 @@ class CompletedTaskCard extends StatelessWidget {
                 width: 22,
                 height: 22,
                 decoration: BoxDecoration(
-                  color: pending ? AppColors.amber : AppColors.blue,
+                  color: pending ? AppColors.amber : color,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
