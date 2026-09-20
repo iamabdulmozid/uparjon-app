@@ -70,6 +70,12 @@ abstract final class ApiErrorCodes {
   static const String businessError = 'BUSINESS_ERROR';
   static const String duplicateRequest = 'DUPLICATE_REQUEST';
   static const String kycRequired = 'KYC_REQUIRED';
+
+  /// The server's catch-all for "this cannot happen twice". It arrives as a
+  /// **500**, but it is a domain rule, not an outage: replaying a
+  /// reward-producing submit answers
+  /// `Duplicate transaction: … has already been processed`.
+  static const String illegalState = 'ILLEGAL_STATE';
   static const String campaignNotEligible = 'CAMPAIGN_NOT_ELIGIBLE';
   static const String insufficientBalance = 'INSUFFICIENT_BALANCE';
 }

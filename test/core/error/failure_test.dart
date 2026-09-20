@@ -70,5 +70,43 @@ void main() {
       );
       expect(failure.message, 'Email is required.');
     });
+
+    // Replaying a survey the server has already paid out answers
+    // `500 ILLEGAL_STATE` with "Duplicate transaction: ... has already been
+    // processed". The generic 5xx mapping calls that an outage and invites a
+    // retry that can never succeed.
+    test('reads a replayed submission as already done, not an outage', () {
+      final failure = Failure.from(
+        const AppException(
+          AppExceptionKind.server,
+          errorCode: ApiErrorCodes.illegalState,
+          message:
+              'Duplicate transaction: referenceId survey:011928aa for type '
+              'BONUS has already been processed',
+          statusCode: 500,
+        ),
+      );
+
+      expect(failure, isA<BusinessFailure>());
+      expect(
+        failure.message,
+        'You have already completed this one. Its reward is on the way.',
+      );
+      expect(failure.message, isNot(contains('Duplicate transaction')));
+    });
+
+    test('keeps other illegal-state failures generic', () {
+      final failure = Failure.from(
+        const AppException(
+          AppExceptionKind.server,
+          errorCode: ApiErrorCodes.illegalState,
+          message: 'Survey slot pool exhausted',
+          statusCode: 500,
+        ),
+      );
+
+      expect(failure, isA<BusinessFailure>());
+      expect(failure.message, 'This action is not available right now.');
+    });
   });
 }

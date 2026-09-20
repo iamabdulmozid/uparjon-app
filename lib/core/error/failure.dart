@@ -76,6 +76,7 @@ sealed class Failure {
         serverMessage ?? 'This action is not available right now.',
         code: code!,
       ),
+      ApiErrorCodes.illegalState => _illegalState(error.message, code!),
       _ => switch (error.kind) {
         AppExceptionKind.network => const NetworkFailure(),
         AppExceptionKind.timeout => const NetworkFailure(
@@ -95,6 +96,27 @@ sealed class Failure {
         AppExceptionKind.unknown => UnknownFailure(code: code),
       },
     };
+  }
+
+  /// `ILLEGAL_STATE` arrives as a 500, so the generic mapping would call it an
+  /// outage and tell the user to try again — which is exactly wrong when the
+  /// reason is that the task already paid out. Retrying can never succeed.
+  ///
+  /// The server text here is diagnostic (`Duplicate transaction: referenceId
+  /// survey:… for type BONUS has already been processed`), so it is matched
+  /// but never shown.
+  static Failure _illegalState(String? serverText, String code) {
+    final text = serverText ?? '';
+    final alreadyDone =
+        text.contains('Duplicate transaction') ||
+        text.contains('already been processed');
+
+    return BusinessFailure(
+      alreadyDone
+          ? 'You have already completed this one. Its reward is on the way.'
+          : 'This action is not available right now.',
+      code: code,
+    );
   }
 
   @override

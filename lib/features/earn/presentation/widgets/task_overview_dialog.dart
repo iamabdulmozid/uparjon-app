@@ -74,6 +74,10 @@ class TaskOverviewDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
+            // The width matters: a [Column] centres its children, so without
+            // it the [Stack] shrink-wraps the title and the close button lands
+            // on top of the text instead of in the dialog's corner.
+            width: double.infinity,
             height: 52,
             child: Stack(
               alignment: Alignment.center,

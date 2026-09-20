@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/app_colors.dart';
+import '../../../core/error/app_exception.dart';
 import '../../../core/error/failure.dart';
 import '../../../core/services/snackbar_service.dart';
 import '../../../core/constants/app_assets.dart';
@@ -120,7 +121,12 @@ class _SurveyScreenState extends ConsumerState<SurveyScreen> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      SnackbarService.showFailure(Failure.from(error));
+      final failure = Failure.from(error);
+      // A survey the server has already paid out can never succeed on retry,
+      // so refresh the feeds — it should drop off the list rather than invite
+      // the user to fill it in again.
+      if (failure.code == ApiErrorCodes.illegalState) invalidateEarnFeeds(ref);
+      SnackbarService.showFailure(failure);
     }
   }
 

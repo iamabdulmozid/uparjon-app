@@ -19,15 +19,36 @@ class VideoPlayerPlayback implements VideoPlayback {
   @override
   ValueListenable<VideoPlaybackState> get state => _state;
 
+  /// Turns a raw player/ExoPlayer failure into something worth showing.
+  ///
+  /// A dead or access-denied media URL is not a connectivity problem, and
+  /// telling the user to check their network sends them chasing the wrong
+  /// thing. The raw text (`InvalidResponseCodeException: Response code: 403`,
+  /// `UnrecognizedInputFormatException`, …) must never reach the screen.
+  static String describeError(Object? error) {
+    final raw = error?.toString() ?? '';
+    final unavailable = [
+      'Response code: 403',
+      'Response code: 404',
+      'Response code: 410',
+      'AccessDenied',
+      'Source error',
+      'UnrecognizedInputFormat',
+      'FileNotFound',
+    ].any(raw.contains);
+
+    return unavailable
+        ? 'This video is unavailable. Please try another ad.'
+        : 'Could not load this video. Check your connection and retry.';
+  }
+
   @override
   Future<void> initialize() async {
     try {
       await _controller.initialize();
-    } catch (_) {
+    } catch (error) {
       if (_disposed) return;
-      _state.value = _state.value.copyWith(
-        error: 'Could not load this video. Check your connection and retry.',
-      );
+      _state.value = _state.value.copyWith(error: describeError(error));
       return;
     }
     if (_disposed) return;
@@ -53,9 +74,7 @@ class VideoPlayerPlayback implements VideoPlayback {
       aspectRatio: value.isInitialized && value.aspectRatio > 0
           ? value.aspectRatio
           : 16 / 9,
-      error: value.hasError
-          ? (value.errorDescription ?? 'Playback failed.')
-          : null,
+      error: value.hasError ? describeError(value.errorDescription) : null,
     );
   }
 
