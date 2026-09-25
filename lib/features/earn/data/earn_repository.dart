@@ -167,13 +167,9 @@ class EarnRepository {
 
   // ------------------------------------------------------------------- stats
 
-  /// `GET /mobile/wallet/earnings-summary` — the "Today's Earning" figure on
-  /// the list screens. A wallet endpoint, read here because the earning
-  /// screens are its only consumer so far.
-  Future<EarningsSummary> earningsSummary() async {
-    final data = await _api.get('/mobile/wallet/earnings-summary');
-    return EarningsSummary.fromJson((data as Map).cast<String, dynamic>());
-  }
+  // The "Today's Earning" figure these screens show comes from the wallet
+  // feature's `walletEarningsProvider` — it is a wallet endpoint, and the
+  // Wallet tab reads it too.
 
   /// `GET /mobile/rewards/history` — what the user has completed, newest
   /// first. Rewards may sit `PENDING` until fraud validation clears them.

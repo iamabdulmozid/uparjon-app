@@ -7,48 +7,12 @@
 /// [num] — the client never does arithmetic on it.
 library;
 
-/// A Spring `Page` envelope, used by the campaign list.
-class Paged<T> {
-  const Paged({
-    required this.items,
-    required this.page,
-    required this.totalPages,
-    required this.totalElements,
-    required this.isLast,
-  });
-
-  final List<T> items;
-  final int page;
-  final int totalPages;
-  final int totalElements;
-  final bool isLast;
-
-  bool get hasMore => !isLast;
-
-  factory Paged.fromJson(
-    Map<String, dynamic> json,
-    T Function(Map<String, dynamic>) itemFromJson,
-  ) => Paged(
-    items: (json['content'] as List? ?? [])
-        .map((e) => itemFromJson((e as Map).cast<String, dynamic>()))
-        .toList(),
-    page:
-        (json['number'] as num?)?.toInt() ??
-        ((json['pageable'] as Map?)?['pageNumber'] as num?)?.toInt() ??
-        0,
-    totalPages: (json['totalPages'] as num?)?.toInt() ?? 0,
-    totalElements: (json['totalElements'] as num?)?.toInt() ?? 0,
-    isLast: json['last'] as bool? ?? true,
-  );
-
-  static Paged<T> empty<T>() => Paged<T>(
-    items: const [],
-    page: 0,
-    totalPages: 0,
-    totalElements: 0,
-    isLast: true,
-  );
-}
+/// `Paged` and `EarningsSummary` used to live here. They are re-exported so
+/// the earning screens keep a single import: the page envelope is shared
+/// infrastructure, and the earnings total belongs to the wallet whose
+/// endpoint serves it.
+export '../../../core/network/paged.dart';
+export '../../wallet/data/wallet_models.dart' show EarningsSummary;
 
 /// A watchable video ad (`VideoAdDto`).
 class VideoAd {
@@ -518,30 +482,6 @@ class SurveyAnswer {
     if (optionIds != null) 'optionIds': optionIds,
     if (textAnswer != null) 'textAnswer': textAnswer,
   };
-}
-
-/// Earnings totals (`EarningsSummaryResponse`,
-/// `GET /mobile/wallet/earnings-summary`).
-class EarningsSummary {
-  const EarningsSummary({
-    required this.today,
-    required this.thisWeek,
-    required this.thisMonth,
-    required this.lifetime,
-  });
-
-  final num today;
-  final num thisWeek;
-  final num thisMonth;
-  final num lifetime;
-
-  factory EarningsSummary.fromJson(Map<String, dynamic> json) =>
-      EarningsSummary(
-        today: json['today'] as num? ?? 0,
-        thisWeek: json['thisWeek'] as num? ?? 0,
-        thisMonth: json['thisMonth'] as num? ?? 0,
-        lifetime: json['lifetime'] as num? ?? 0,
-      );
 }
 
 /// A completed task's reward (`RewardHistoryItem`,

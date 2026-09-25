@@ -14,6 +14,7 @@ class ActivityTile extends StatelessWidget {
     required this.timestamp,
     required this.icon,
     required this.background,
+    this.amountColor,
   });
 
   final String title;
@@ -24,6 +25,9 @@ class ActivityTile extends StatelessWidget {
   final String timestamp;
   final String icon;
   final Color background;
+
+  /// Defaults to the credit green. Debits (withdrawals) pass their own.
+  final Color? amountColor;
 
   @override
   Widget build(BuildContext context) {
@@ -87,10 +91,10 @@ class ActivityTile extends StatelessWidget {
             children: [
               Text(
                 amount,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.greenDeep,
+                  color: amountColor ?? AppColors.greenDeep,
                 ),
               ),
               const SizedBox(height: 4),

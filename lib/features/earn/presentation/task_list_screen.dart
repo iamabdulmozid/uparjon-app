@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router/routes.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/error/failure.dart';
+import '../../../core/ui/list_state_message.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
 import 'earn_providers.dart';
@@ -97,7 +98,7 @@ class TaskListScreen extends ConsumerWidget {
                 ),
               ],
               error: (error, _) => [
-                EarnListState(
+                ListStateMessage(
                   message: error is Failure
                       ? error.message
                       : 'Could not load this list.',
@@ -105,7 +106,7 @@ class TaskListScreen extends ConsumerWidget {
                 ),
               ],
               data: (list) => list.isEmpty
-                  ? [EarnListState(message: kind.emptyMessage)]
+                  ? [ListStateMessage(message: kind.emptyMessage)]
                   : [
                       for (final item in list)
                         EarnTaskCard(

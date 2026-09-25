@@ -88,11 +88,26 @@ void main() {
       );
 
       expect(failure, isA<BusinessFailure>());
+      expect(failure.message, 'You have already been rewarded for this one.');
+      expect(failure.message, isNot(contains('Duplicate transaction')));
+    });
+
+    test('tells the user to finish the video, not to retry', () {
+      final failure = Failure.from(
+        const AppException(
+          AppExceptionKind.server,
+          errorCode: ApiErrorCodes.illegalState,
+          message: 'Insufficient watch duration. Required: 24s, watched: 10s',
+          statusCode: 500,
+        ),
+      );
+
+      expect(failure, isA<BusinessFailure>());
       expect(
         failure.message,
-        'You have already completed this one. Its reward is on the way.',
+        'Please watch the whole video to earn this reward.',
       );
-      expect(failure.message, isNot(contains('Duplicate transaction')));
+      expect(failure.message, isNot(contains('Required')));
     });
 
     test('keeps other illegal-state failures generic', () {

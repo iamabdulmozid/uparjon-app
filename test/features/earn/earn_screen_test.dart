@@ -6,18 +6,6 @@ import 'package:uparjon/features/earn/presentation/task_list_screen.dart';
 import '../../support/fake_api.dart';
 import '../../support/pump_app.dart';
 
-/// A page of items, shaped like Spring's `Page`.
-Map<String, dynamic> springPage(List<Map<String, dynamic>> items) => {
-  'content': items,
-  'number': 0,
-  'size': 20,
-  'totalElements': items.length,
-  'totalPages': items.isEmpty ? 0 : 1,
-  'first': true,
-  'last': true,
-  'empty': items.isEmpty,
-};
-
 const regalAd = {
   'adId': 'ad-1',
   'title': 'Regal Furniture Up to 15% Off',

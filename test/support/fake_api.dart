@@ -20,6 +20,25 @@ FakeReply apiError(
   body: {'success': false, 'errorCode': errorCode, 'message': message},
 );
 
+/// A page of items, shaped like Spring's `Page` — what the campaign,
+/// reward-history and wallet-transaction endpoints wrap their lists in.
+Map<String, dynamic> springPage(List<Map<String, dynamic>> items, {
+  int size = 20,
+  int? totalElements,
+}) {
+  final total = totalElements ?? items.length;
+  return {
+    'content': items,
+    'number': 0,
+    'size': size,
+    'totalElements': total,
+    'totalPages': total == 0 ? 0 : (total / size).ceil(),
+    'first': true,
+    'last': items.length >= total,
+    'empty': items.isEmpty,
+  };
+}
+
 /// A response with no envelope at all — `GET /mobile/ads/feed` and the quiz
 /// and survey lists answer with a bare JSON array.
 FakeReply rawJson(Object? body) => (status: 200, body: body);
@@ -114,8 +133,9 @@ class FakeApi implements HttpClientAdapter {
   Dio get dio => Dio(
     BaseOptions(
       baseUrl: 'https://fake.test/api/v1',
-      // Mirror ApiClient: non-2xx must reach the envelope parser.
-      validateStatus: (status) => status != null && status < 500,
+      // Mirror ApiClient: every status, 5xx included, must reach the envelope
+      // parser so the server's errorCode survives.
+      validateStatus: (_) => true,
     ),
   )..httpClientAdapter = this;
 }

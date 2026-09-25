@@ -28,8 +28,15 @@ class ApiClient {
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 20),
     headers: {'Accept': 'application/json'},
-    // Let non-2xx through so the envelope's errorCode can be read.
-    validateStatus: (status) => status != null && status < 500,
+    // Let *every* status through so the envelope's errorCode can be read.
+    //
+    // 5xx included: the API answers domain rules it treats as impossible
+    // states with a 500 carrying `ILLEGAL_STATE` ("You have already been
+    // rewarded for this ad", "Insufficient watch duration"). Stopping at
+    // `< 500` made dio throw before [unwrap] ever saw the body, so those
+    // codes were lost and every one of them reached the user as a generic
+    // "something went wrong on our side".
+    validateStatus: (_) => true,
   );
 
   /// Attaches the app's interceptors. An injected [dio] is configured too, so

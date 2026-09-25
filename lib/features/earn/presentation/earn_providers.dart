@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../wallet/presentation/wallet_providers.dart';
 import '../data/earn_models.dart';
 import '../data/earn_repository.dart';
 import 'earn_task_kind.dart';
@@ -48,8 +49,11 @@ final surveyDetailsProvider = FutureProvider.autoDispose
     );
 
 /// Today / week / month / lifetime earnings — the "Today's Earning" stat.
+///
+/// Delegates to the wallet feature, which owns the endpoint, so the figure
+/// here and the one on the Wallet tab can never disagree.
 final earningsSummaryProvider = FutureProvider.autoDispose<EarningsSummary>(
-  (ref) => ref.watch(earnRepositoryProvider).earningsSummary(),
+  (ref) => ref.watch(walletEarningsProvider.future),
 );
 
 /// First page of completed rewards — the "Completed" cards and the activity
@@ -89,7 +93,10 @@ void invalidateEarnFeeds(WidgetRef ref) {
   ref.invalidate(surveysProvider);
   ref.invalidate(campaignsProvider);
   ref.invalidate(featuredCampaignsProvider);
-  ref.invalidate(earningsSummaryProvider);
   ref.invalidate(rewardHistoryProvider);
   ref.invalidate(dailyTasksProvider);
+  // A reward moves the balance and writes a ledger row, so the wallet is
+  // stale too — Home's balance card would otherwise keep the old figure
+  // until the app restarted.
+  invalidateWallet(ref);
 }

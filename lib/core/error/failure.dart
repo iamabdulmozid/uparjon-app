@@ -98,25 +98,30 @@ sealed class Failure {
     };
   }
 
-  /// `ILLEGAL_STATE` arrives as a 500, so the generic mapping would call it an
-  /// outage and tell the user to try again — which is exactly wrong when the
-  /// reason is that the task already paid out. Retrying can never succeed.
+  /// `ILLEGAL_STATE` is what the API returns for a rule it treats as an
+  /// impossible state, and it arrives as a **500**. The generic mapping would
+  /// call that an outage and invite a retry, which is exactly wrong: none of
+  /// these can ever succeed on a second attempt.
   ///
-  /// The server text here is diagnostic (`Duplicate transaction: referenceId
-  /// survey:… for type BONUS has already been processed`), so it is matched
-  /// but never shown.
+  /// The server text is diagnostic rather than user-facing (`Duplicate
+  /// transaction: referenceId survey:… has already been processed`,
+  /// `Insufficient watch duration. Required: 24s, watched: 10s`), so it is
+  /// matched here but never shown.
   static Failure _illegalState(String? serverText, String code) {
     final text = serverText ?? '';
-    final alreadyDone =
-        text.contains('Duplicate transaction') ||
-        text.contains('already been processed');
 
-    return BusinessFailure(
-      alreadyDone
-          ? 'You have already completed this one. Its reward is on the way.'
-          : 'This action is not available right now.',
-      code: code,
-    );
+    final message = switch (text) {
+      _
+          when text.contains('already been rewarded') ||
+              text.contains('already been processed') ||
+              text.contains('Duplicate transaction') =>
+        'You have already been rewarded for this one.',
+      _ when text.contains('Insufficient watch duration') =>
+        'Please watch the whole video to earn this reward.',
+      _ => 'This action is not available right now.',
+    };
+
+    return BusinessFailure(message, code: code);
   }
 
   @override

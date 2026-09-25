@@ -5,6 +5,30 @@ abstract final class Formatters {
   /// "৳10.00" — the taka amount as the API returned it.
   static String taka(num amount) => '৳${amount.toStringAsFixed(2)}';
 
+  /// "16,457.15" — two decimals with thousands separators, for the balance
+  /// card. No currency sign; the card draws its own.
+  static String grouped(num amount) {
+    final text = amount.abs().toStringAsFixed(2);
+    final parts = text.split('.');
+    final digits = parts.first;
+    final buffer = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      final remaining = digits.length - i;
+      if (i > 0 && remaining % 3 == 0) buffer.write(',');
+      buffer.write(digits[i]);
+    }
+    final sign = amount < 0 ? '-' : '';
+    return '$sign$buffer.${parts.last}';
+  }
+
+  /// "৳16,457.15" — [grouped] with the taka sign, for wallet figures.
+  static String takaGrouped(num amount) => '৳${grouped(amount)}';
+
+  /// "+ ৳10.00" for a credit, "- ৳500.00" for a debit. The API signs
+  /// withdrawals negative, so the sign comes from the amount itself.
+  static String signedTaka(num amount) =>
+      '${amount < 0 ? '-' : '+'} ৳${amount.abs().toStringAsFixed(2)}';
+
   /// "৳ 60" for whole amounts, "৳ 12.50" otherwise (Figma stat cards).
   static String takaCompact(num amount) {
     final isWhole = amount % 1 == 0;

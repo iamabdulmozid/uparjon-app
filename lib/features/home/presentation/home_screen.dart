@@ -2,93 +2,130 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_colors.dart';
-import '../../../core/constants/app_assets.dart';
+import '../../../core/error/failure.dart';
+import '../../../core/ui/balance_card.dart';
+import '../../../core/ui/list_state_message.dart';
 import '../../../core/services/snackbar_service.dart';
+import '../../../core/utils/formatters.dart';
 import '../../../app/shell/shell_tab.dart';
 import '../../auth/presentation/auth_controller.dart';
-import '../../../core/ui/activity_tile.dart';
-import 'widgets/balance_card.dart';
+import '../../wallet/presentation/wallet_providers.dart';
+import '../../wallet/presentation/widgets/transaction_tile.dart';
 import 'widgets/module_tiles.dart';
 import 'widgets/promo_banner.dart';
 
 /// Home dashboard (Figma: "Main Home").
 ///
-/// TODO(api): balance and recent activity are placeholders until the
-/// wallet/activity endpoints exist.
+/// Home aggregates other modules rather than owning data of its own, so it
+/// reads the wallet through that feature's providers — the balance here and
+/// the one on the Wallet tab come from the same fetch and cannot disagree.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
+
+  /// How many ledger rows Recent Activity shows before the Wallet tab takes
+  /// over.
+  static const _activityCount = 3;
+
+  static const _activityTints = [
+    AppColors.amberTint,
+    AppColors.purpleTint,
+    AppColors.lavenderTint,
+  ];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authControllerProvider).value?.user;
     final name = user?.shortName ?? 'there';
+    final overview = ref.watch(walletOverviewProvider);
+    final transactions = ref.watch(walletTransactionsProvider);
 
     return Scaffold(
       backgroundColor: AppColors.creamLight,
       body: SafeArea(
         bottom: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          children: [
-            _Header(name: name),
-            const SizedBox(height: 20),
-            BalanceCard(
-              balance: '16,457.15',
-              onWithdraw: () =>
-                  SnackbarService.showInfo('Withdrawal is coming soon.'),
-            ),
-            const SizedBox(height: 24),
-            ModuleTiles(
-              onTap: (module) {
-                if (module == 'Uparjon') {
-                  ref.read(shellTabProvider.notifier).select(ShellTab.earn);
-                  return;
-                }
-                SnackbarService.showInfo('$module arrives in a later release.');
-              },
-            ),
-            const SizedBox(height: 24),
-            PromoBanner(
-              onTap: () =>
-                  SnackbarService.showInfo('Advertiser signup is coming soon.'),
-            ),
-            const SizedBox(height: 28),
-            const Text(
-              'Recent Activity',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: AppColors.charcoal,
+        child: RefreshIndicator(
+          color: AppColors.amber,
+          onRefresh: () async => invalidateWallet(ref),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            children: [
+              _Header(name: name),
+              const SizedBox(height: 20),
+              BalanceCard(
+                // Em dash until the first fetch lands, so the card never
+                // shows a number that is not the user's.
+                balance: overview.value == null
+                    ? '—'
+                    : Formatters.grouped(overview.value!.availableBalance),
+                pending: overview.value?.pendingBalance,
+                onWithdraw: () =>
+                    SnackbarService.showInfo('Withdrawal is coming soon.'),
               ),
-            ),
-            const SizedBox(height: 16),
-            const ActivityTile(
-              title: 'Video Ad',
-              subtitle: 'Watch video ad and earn money',
-              amount: '+ ৳15.00',
-              timestamp: '11 Jul 26 | 10:10 am',
-              icon: AppAssets.iconVideo,
-              background: Color(0xFFFDF7E9),
-            ),
-            const SizedBox(height: 8),
-            const ActivityTile(
-              title: 'Survey',
-              subtitle: 'Complete survey and earn money',
-              amount: '+ ৳10.00',
-              timestamp: '11 Jul 26 | 10:10 am',
-              icon: AppAssets.iconClipboard,
-              background: Color(0xFFF7F3FC),
-            ),
-            const SizedBox(height: 8),
-            const ActivityTile(
-              title: 'Video Ad',
-              subtitle: 'Watch video ad and earn money',
-              amount: '+ ৳15.00',
-              timestamp: '10 Jul 26 | 09:02 am',
-              icon: AppAssets.iconVideo,
-              background: Color(0xFFF0F4FC),
-            ),
-          ],
+              const SizedBox(height: 24),
+              ModuleTiles(
+                onTap: (module) {
+                  if (module == 'Uparjon') {
+                    ref.read(shellTabProvider.notifier).select(ShellTab.earn);
+                    return;
+                  }
+                  SnackbarService.showInfo(
+                    '$module arrives in a later release.',
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+              PromoBanner(
+                onTap: () => SnackbarService.showInfo(
+                  'Advertiser signup is coming soon.',
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Text(
+                'Recent Activity',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.charcoal,
+                ),
+              ),
+              const SizedBox(height: 16),
+              transactions.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(
+                    child: CircularProgressIndicator(color: AppColors.amber),
+                  ),
+                ),
+                error: (error, _) => ListStateMessage(
+                  message: error is Failure
+                      ? error.message
+                      : 'Could not load your activity.',
+                  onRetry: () => ref.invalidate(walletTransactionsProvider),
+                ),
+                data: (page) {
+                  final rows = page.items.take(_activityCount).toList();
+                  if (rows.isEmpty) {
+                    return const ListStateMessage(
+                      message:
+                          'Nothing here yet. Earn your first reward and it '
+                          'will show up.',
+                    );
+                  }
+                  return Column(
+                    children: [
+                      for (final (i, item) in rows.indexed) ...[
+                        if (i > 0) const SizedBox(height: 8),
+                        TransactionTile(
+                          transaction: item,
+                          tint: _activityTints[i % _activityTints.length],
+                        ),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );

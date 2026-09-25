@@ -134,6 +134,58 @@ void main() {
       expect(find.text('Not rewarded'), findsOneWidget);
     });
 
+    // The API reports domain rules it treats as impossible states with a
+    // **500** carrying `ILLEGAL_STATE`. Those must reach the user as the rule
+    // they are, not as "our side is broken, try again" — a retry can never
+    // succeed, and the earlier client discarded the errorCode on any 5xx.
+    testWidgets('explains a rejected watch instead of blaming the server', (
+      tester,
+    ) async {
+      final api = adApi(
+        view: apiError(
+          'ILLEGAL_STATE',
+          status: 500,
+          message: 'Insufficient watch duration. Required: 24s, watched: 10s',
+        ),
+      );
+      await open(tester, api, Routes.watchAd, 'ad-1');
+
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Please watch the whole video to earn this reward.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Something went wrong on our side. Please try again.'),
+        findsNothing,
+      );
+      // The diagnostic text is matched, never shown.
+      expect(find.textContaining('Required: 24s'), findsNothing);
+    });
+
+    testWidgets('says so when the ad has already paid out', (tester) async {
+      final api = adApi(
+        view: apiError(
+          'ILLEGAL_STATE',
+          status: 500,
+          message: 'You have already been rewarded for this ad',
+        ),
+      );
+      await open(tester, api, Routes.watchAd, 'ad-1');
+
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('You have already been rewarded for this one.'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('an ad without a video still runs a clock for its duration', (
       tester,
     ) async {

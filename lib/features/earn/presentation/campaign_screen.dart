@@ -8,6 +8,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/error/app_exception.dart';
 import '../../../core/error/failure.dart';
+import '../../../core/ui/list_state_message.dart';
 import '../../../core/services/snackbar_service.dart';
 import '../../../core/ui/app_button.dart';
 import '../../../core/utils/formatters.dart';
@@ -16,7 +17,6 @@ import '../data/earn_repository.dart';
 import 'earn_providers.dart';
 import 'widgets/campaign_overview_dialog.dart';
 import 'widgets/earn_popup.dart';
-import 'widgets/earn_task_card.dart';
 import 'widgets/preparing_view.dart';
 
 /// Campaign run (API lifecycle: start → complete → fraud validation → reward).
@@ -126,7 +126,7 @@ class _CampaignScreenState extends ConsumerState<CampaignScreen> {
               title: 'Starting Campaign',
               subtitle: 'Please wait a moment',
             )
-          : EarnListState(
+          : ListStateMessage(
               message: startFailure.message,
               onRetry: () => unawaited(_start()),
             );
@@ -137,7 +137,7 @@ class _CampaignScreenState extends ConsumerState<CampaignScreen> {
             loading: () => const Center(
               child: CircularProgressIndicator(color: AppColors.amber),
             ),
-            error: (error, _) => EarnListState(
+            error: (error, _) => ListStateMessage(
               message: error is Failure
                   ? error.message
                   : 'Could not load this campaign.',

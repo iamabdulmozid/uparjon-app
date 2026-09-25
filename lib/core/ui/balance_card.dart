@@ -1,16 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-import '../../../../app/theme/app_colors.dart';
-import '../../../../core/constants/app_assets.dart';
+import '../../app/theme/app_colors.dart';
+import '../constants/app_assets.dart';
+import '../utils/formatters.dart';
 
-/// Gold wallet summary at the top of Home (Figma: 382x186, 16pt radius).
+/// Gold wallet summary (Figma: 382x186, 16pt radius).
+///
+/// Shown at the top of both Home and the Wallet tab, which is why it lives
+/// in the UI kit rather than in either feature.
 class BalanceCard extends StatefulWidget {
-  const BalanceCard({super.key, required this.balance, this.onWithdraw});
+  const BalanceCard({
+    super.key,
+    required this.balance,
+    this.pending,
+    this.onWithdraw,
+  });
 
-  /// Formatted balance, e.g. "16,457.15". Money is always formatted by the
-  /// server — the client never does arithmetic on it.
+  /// Formatted balance, e.g. "16,457.15". Money is only ever formatted —
+  /// the client never does arithmetic on it.
   final String balance;
+
+  /// Earned but still held by fraud validation. Shown under the balance when
+  /// it is above zero, so the user is not left wondering where a reward they
+  /// just earned went. Null hides the line entirely.
+  final num? pending;
+
   final VoidCallback? onWithdraw;
 
   @override
@@ -85,6 +100,17 @@ class _BalanceCardState extends State<BalanceCard> {
                       color: AppColors.charcoal,
                     ),
                   ),
+                  if (_visible && (widget.pending ?? 0) > 0) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      '${Formatters.takaGrouped(widget.pending!)} pending',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.gray,
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   Align(
                     alignment: Alignment.centerLeft,

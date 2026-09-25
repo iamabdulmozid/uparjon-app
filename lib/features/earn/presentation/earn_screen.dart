@@ -8,13 +8,13 @@ import '../../../app/router/routes.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/error/failure.dart';
+import '../../../core/ui/list_state_message.dart';
 import '../../../core/ui/activity_tile.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
 import 'earn_providers.dart';
 import 'earn_task_kind.dart';
 import 'widgets/earn_stat_card.dart';
-import 'widgets/earn_task_card.dart';
 import 'widgets/opportunity_tile.dart';
 
 /// The Uparjon tab (Figma: "Uparjon") — today's progress, the earning
@@ -131,14 +131,14 @@ class EarnScreen extends ConsumerWidget {
                     child: CircularProgressIndicator(color: AppColors.amber),
                   ),
                 ),
-                error: (error, _) => EarnListState(
+                error: (error, _) => ListStateMessage(
                   message: error is Failure
                       ? error.message
                       : 'Could not load your activity.',
                   onRetry: () => ref.invalidate(rewardHistoryProvider),
                 ),
                 data: (page) => page.items.isEmpty
-                    ? const EarnListState(
+                    ? const ListStateMessage(
                         message:
                             'Nothing here yet. Complete a task and it will '
                             'show up.',

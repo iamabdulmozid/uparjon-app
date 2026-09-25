@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/error/failure.dart';
+import '../../../core/ui/list_state_message.dart';
 import '../../../core/media/timed_playback.dart';
 import '../../../core/media/video_playback.dart';
 import '../../../core/ui/app_button.dart';
@@ -16,7 +17,6 @@ import '../data/earn_models.dart';
 import '../data/earn_repository.dart';
 import 'earn_providers.dart';
 import 'widgets/earn_popup.dart';
-import 'widgets/earn_task_card.dart';
 import 'widgets/preparing_view.dart';
 import 'widgets/question_scaffold.dart';
 
@@ -188,7 +188,7 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
               title: 'Loading Advertisement',
               subtitle: 'Please wait a moment',
             )
-          : EarnListState(message: loadError, onRetry: _retry);
+          : ListStateMessage(message: loadError, onRetry: _retry);
     } else if (question != null && _phase != _Phase.watching) {
       // Stays behind the Verifying/result popups once submitted.
       body = _AdQuestionBody(
@@ -247,12 +247,12 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
           title: 'Loading Advertisement',
           subtitle: 'Please wait a moment',
         ),
-        error: (error, _) => EarnListState(
+        error: (error, _) => ListStateMessage(
           message: error is Failure ? error.message : 'Could not load this ad.',
           onRetry: () => ref.invalidate(adsFeedProvider),
         ),
         data: (_) => found == null
-            ? const EarnListState(message: 'This ad is no longer available.')
+            ? const ListStateMessage(message: 'This ad is no longer available.')
             : const PreparingView(
                 title: 'Loading Advertisement',
                 subtitle: 'Please wait a moment',
