@@ -228,14 +228,14 @@ class _TaskItem {
             'Before you start',
             bullets: [
               'Watch the video till the end',
-              if (ad.question != null) 'Answer the question correctly.',
+              // The feed card cannot say whether questions follow — only
+              // `GET /ads/{id}` knows — so the copy covers both.
+              'If a question follows, answer it correctly.',
               "You can't skip the video",
             ],
           ),
           rewardSection(
-            lead: ad.question == null
-                ? 'Watch the full video to receive'
-                : 'Answer all the questions correctly to receive',
+            lead: 'Complete the ad to receive',
             amount: ad.reward,
             tail: 'The reward will be added to your wallet after verification',
           ),

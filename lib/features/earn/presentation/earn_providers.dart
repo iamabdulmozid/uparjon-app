@@ -12,6 +12,11 @@ final adsFeedProvider = FutureProvider.autoDispose<List<VideoAd>>(
   (ref) => ref.watch(earnRepositoryProvider).adsFeed(),
 );
 
+/// One ad with its questions (`GET /ads/{id}`).
+final adDetailsProvider = FutureProvider.autoDispose.family<VideoAd, String>(
+  (ref, id) => ref.watch(earnRepositoryProvider).ad(id),
+);
+
 /// Available quizzes (`GET /mobile/quizzes`).
 final quizzesProvider = FutureProvider.autoDispose<List<QuizCard>>(
   (ref) => ref.watch(earnRepositoryProvider).quizzes(),

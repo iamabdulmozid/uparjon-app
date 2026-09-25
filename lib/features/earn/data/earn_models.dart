@@ -14,7 +14,29 @@ library;
 export '../../../core/network/paged.dart';
 export '../../wallet/data/wallet_models.dart' show EarningsSummary;
 
-/// A watchable video ad (`VideoAdDto`).
+/// What an ad asks of the viewer (`AdResponse.adType`).
+enum AdType {
+  video,
+  image,
+
+  /// Questions after the media, graded against `passingScore`.
+  quiz,
+
+  /// Questions after the media, recorded as feedback and never graded.
+  survey,
+  other;
+
+  static AdType parse(String? raw) => switch (raw?.toUpperCase()) {
+    'VIDEO' || null => video,
+    'IMAGE' || 'GIF' => image,
+    'QUIZ' => quiz,
+    'SURVEY' => survey,
+    _ => other,
+  };
+}
+
+/// A watchable ad: a feed card (`VideoAdDto`) or, with its questions, the
+/// full `AdResponse` from `GET /ads/{id}`.
 class VideoAd {
   const VideoAd({
     required this.adId,
@@ -23,22 +45,72 @@ class VideoAd {
     this.thumbnailUrl,
     this.duration,
     this.reward,
-    this.question,
+    this.adType = AdType.video,
+    this.status,
+    this.questions = const [],
+    this.passingScore,
+    this.maxAttempts,
   });
 
   final String adId;
   final String title;
+
+  /// The creative — a video, or an image/GIF shown for [duration].
   final String? videoUrl;
   final String? thumbnailUrl;
 
   /// Required watch time in seconds.
   final int? duration;
   final num? reward;
+  final AdType adType;
 
-  /// Follow-up question asked once the video ends (PRD ADS-4, Figma V2
-  /// "Uparjon - Watch Ad"). `VideoAdDto` does not carry one yet, so this is
-  /// null today and the flow goes straight from the video to verification.
-  final AdQuestion? question;
+  /// `AdResponse.status`; the feed card carries none.
+  final String? status;
+
+  /// Asked once the media ends (Figma V3 "Watch Ad" question step). Only
+  /// `GET /ads/{id}` carries them — the feed card never does. The API uses
+  /// the survey `QuestionDto` for ad questions too, so the survey model and
+  /// its answer widgets serve both.
+  final List<SurveyQuestion> questions;
+  final int? passingScore;
+
+  /// How many graded submissions the server accepts; null means one.
+  final int? maxAttempts;
+
+  bool get hasQuestions => questions.isNotEmpty;
+
+  /// Answers go to `/surveys/submit` (ungraded) rather than `/quizzes/submit`.
+  bool get isSurvey => adType == AdType.survey;
+
+  /// Taken off sale by the advertiser or out of budget.
+  bool get isActive => status == null || status == 'ACTIVE';
+
+  static const _imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+
+  /// A still or animated image rather than a video.
+  bool get isImage {
+    if (adType == AdType.image) return true;
+    final path = Uri.tryParse(videoUrl ?? '')?.path.toLowerCase() ?? '';
+    return _imageExtensions.any(path.endsWith);
+  }
+
+  /// This ad's details with anything they lack taken from [card] — the feed
+  /// entry the user tapped.
+  VideoAd withFallback(VideoAd? card) => card == null
+      ? this
+      : VideoAd(
+          adId: adId,
+          title: title.isEmpty ? card.title : title,
+          videoUrl: videoUrl ?? card.videoUrl,
+          thumbnailUrl: thumbnailUrl ?? card.thumbnailUrl,
+          duration: duration ?? card.duration,
+          reward: reward ?? card.reward,
+          adType: adType,
+          status: status,
+          questions: questions,
+          passingScore: passingScore,
+          maxAttempts: maxAttempts,
+        );
 
   factory VideoAd.fromJson(Map<String, dynamic> json) => VideoAd(
     adId: (json['adId'] ?? json['id'])?.toString() ?? '',
@@ -47,43 +119,59 @@ class VideoAd {
     thumbnailUrl: (json['thumbnailUrl'] ?? json['thumbnail']) as String?,
     duration: ((json['duration'] ?? json['durationSeconds']) as num?)?.toInt(),
     reward: (json['reward'] ?? json['rewardAmount']) as num?,
-    question: AdQuestion.tryParse(json['question']),
+    adType: AdType.parse(json['adType'] as String?),
+    status: json['status'] as String?,
+    questions: _inOrder(json['questions']),
+    passingScore: (json['passingScore'] as num?)?.toInt(),
+    maxAttempts: (json['maxAttempts'] as num?)?.toInt(),
   );
+
+  /// Questions sorted by `orderIndex`; ties and missing indexes keep the
+  /// order they arrived in (`List.sort` alone is not stable).
+  static List<SurveyQuestion> _inOrder(Object? raw) {
+    final parsed = [
+      for (final item in raw is List ? raw : const [])
+        if (item is Map) SurveyQuestion.fromJson(item.cast<String, dynamic>()),
+    ];
+    final positions = {for (final (i, q) in parsed.indexed) q: i};
+    int rank(SurveyQuestion q) => q.orderIndex ?? positions[q]!;
+    return parsed..sort((a, b) {
+      final byIndex = rank(a).compareTo(rank(b));
+      return byIndex != 0 ? byIndex : positions[a]!.compareTo(positions[b]!);
+    });
+  }
 }
 
-/// A single-answer question about an ad.
-///
-/// Provisional shape — the API has no ad question yet. Parsing mirrors the
-/// quiz DTOs (`questionText`, `options[].optionText`) so the backend can
-/// reuse them; adjust here once `VideoAdDto` is extended.
-class AdQuestion {
-  const AdQuestion({
-    required this.id,
-    required this.text,
-    required this.options,
+/// Outcome of answering an ad's questions (`POST /quizzes/submit` or
+/// `/surveys/submit`, both untyped maps in the OpenAPI).
+class AdAssessment {
+  const AdAssessment({
+    required this.passed,
+    required this.rewardTriggered,
+    this.score,
+    this.totalQuestions,
+    this.pointsEarned,
   });
 
-  final String id;
-  final String text;
-  final List<QuizOption> options;
+  final bool passed;
+  final bool rewardTriggered;
+  final int? score;
+  final int? totalQuestions;
+  final num? pointsEarned;
 
-  /// Null unless [raw] is a question with at least one option.
-  static AdQuestion? tryParse(Object? raw) {
-    if (raw is! Map) return null;
-    final json = raw.cast<String, dynamic>();
-    final options = [
-      for (final option in json['options'] as List? ?? const [])
-        if (option is Map)
-          QuizOption(
-            id: option['id']?.toString() ?? '',
-            text: (option['optionText'] ?? option['text']) as String? ?? '',
-          ),
-    ];
-    if (options.isEmpty) return null;
-    return AdQuestion(
-      id: json['id']?.toString() ?? '',
-      text: (json['questionText'] ?? json['text']) as String? ?? '',
-      options: options,
+  /// [passedByDefault] covers a survey reply without a `passed` flag: a
+  /// survey is not graded, so an accepted submission is a pass.
+  factory AdAssessment.fromJson(
+    Map<String, dynamic> json, {
+    bool passedByDefault = false,
+  }) {
+    final passed = json['passed'] as bool? ?? passedByDefault;
+    return AdAssessment(
+      passed: passed,
+      rewardTriggered: json['rewardTriggered'] as bool? ?? passed,
+      score: (json['score'] as num?)?.toInt(),
+      totalQuestions: (json['totalQuestions'] as num?)?.toInt(),
+      pointsEarned: json['pointsEarned'] as num?,
     );
   }
 }
@@ -389,6 +477,7 @@ class SurveyQuestion {
     required this.options,
     this.minVal,
     this.maxVal,
+    this.orderIndex,
   });
 
   final String id;
@@ -401,11 +490,16 @@ class SurveyQuestion {
   final int? minVal;
   final int? maxVal;
 
+  /// Position within an ad's questions (`QuestionDto.orderIndex`).
+  final int? orderIndex;
+
   factory SurveyQuestion.fromJson(Map<String, dynamic> json) => SurveyQuestion(
     id: json['id']?.toString() ?? '',
     text: json['questionText'] as String? ?? '',
     type: SurveyQuestionType.parse(json['questionType'] as String?),
-    isRequired: json['required'] as bool? ?? false,
+    // Surveys send `required`; the ad `QuestionDto` names it `isRequired`.
+    isRequired: (json['required'] ?? json['isRequired']) as bool? ?? false,
+    orderIndex: (json['orderIndex'] as num?)?.toInt(),
     minVal: (json['minVal'] as num?)?.toInt(),
     maxVal: (json['maxVal'] as num?)?.toInt(),
     options: (json['options'] as List? ?? [])
@@ -475,6 +569,12 @@ class SurveyAnswer {
   final String? optionId;
   final List<String>? optionIds;
   final String? textAnswer;
+
+  /// Something was picked or typed — a blank text box does not count.
+  bool get hasValue =>
+      optionId != null ||
+      (optionIds?.isNotEmpty ?? false) ||
+      (textAnswer?.trim().isNotEmpty ?? false);
 
   Map<String, dynamic> toJson() => {
     'questionId': questionId,

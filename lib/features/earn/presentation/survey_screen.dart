@@ -15,6 +15,7 @@ import '../data/earn_repository.dart';
 import 'earn_providers.dart';
 import 'widgets/earn_popup.dart';
 import 'widgets/preparing_view.dart';
+import 'widgets/answer_input.dart';
 import 'widgets/question_scaffold.dart';
 
 /// Survey runner (Figma V2: "Uparjon - Loading Survey" → "Uparjon - Survey",
@@ -96,13 +97,8 @@ class _SurveyScreenState extends ConsumerState<SurveyScreen> {
     }
   }
 
-  bool _isAnswered(SurveyQuestion question) {
-    final answer = _answers[question.id];
-    if (answer == null) return false;
-    return answer.optionId != null ||
-        (answer.optionIds?.isNotEmpty ?? false) ||
-        (answer.textAnswer?.trim().isNotEmpty ?? false);
-  }
+  bool _isAnswered(SurveyQuestion question) =>
+      _answers[question.id]?.hasValue ?? false;
 
   Future<void> _submit(SurveyDetails survey) async {
     setState(() => _submitting = true);
@@ -214,7 +210,7 @@ class _SurveyScreenState extends ConsumerState<SurveyScreen> {
                   onNext: () =>
                       isLast ? _submit(survey) : setState(() => _index++),
                   onFinishNow: _confirmExit,
-                  child: _AnswerInput(
+                  child: AnswerInput(
                     // Keeps the text box from carrying one question's draft
                     // over to the next.
                     key: ValueKey(question.id),
@@ -268,143 +264,4 @@ class _SurveyScreenState extends ConsumerState<SurveyScreen> {
   }
 
   void _dismissExit() => setState(() => _confirmingExit = false);
-}
-
-/// Renders the right control for each of the API's question types.
-class _AnswerInput extends StatelessWidget {
-  const _AnswerInput({
-    super.key,
-    required this.question,
-    required this.answer,
-    required this.onChanged,
-  });
-
-  final SurveyQuestion question;
-  final SurveyAnswer? answer;
-  final ValueChanged<SurveyAnswer> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    switch (question.type) {
-      case SurveyQuestionType.multipleChoice:
-        final selected = answer?.optionIds ?? const <String>[];
-        return Column(
-          children: [
-            for (final option in question.options)
-              ChoiceTile(
-                label: option.text,
-                multi: true,
-                selected: selected.contains(option.id),
-                onTap: () {
-                  final next = [...selected];
-                  next.contains(option.id)
-                      ? next.remove(option.id)
-                      : next.add(option.id);
-                  onChanged(
-                    SurveyAnswer(questionId: question.id, optionIds: next),
-                  );
-                },
-              ),
-          ],
-        );
-
-      case SurveyQuestionType.boolean:
-        final selected = answer?.textAnswer;
-        return Column(
-          children: [
-            for (final value in ['Yes', 'No'])
-              ChoiceTile(
-                label: value,
-                selected: selected == value,
-                onTap: () => onChanged(
-                  SurveyAnswer(questionId: question.id, textAnswer: value),
-                ),
-              ),
-          ],
-        );
-
-      case SurveyQuestionType.rating:
-        final min = question.minVal ?? 1;
-        final max = question.maxVal ?? 5;
-        final current = int.tryParse(answer?.textAnswer ?? '');
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (var value = min; value <= max; value++)
-              _RatingChip(
-                value: value,
-                selected: current == value,
-                onTap: () => onChanged(
-                  SurveyAnswer(questionId: question.id, textAnswer: '$value'),
-                ),
-              ),
-          ],
-        );
-
-      case SurveyQuestionType.text:
-        return AnswerTextField(
-          initialValue: answer?.textAnswer,
-          onChanged: (value) => onChanged(
-            SurveyAnswer(questionId: question.id, textAnswer: value),
-          ),
-        );
-
-      case SurveyQuestionType.singleChoice:
-      case SurveyQuestionType.unknown:
-        return Column(
-          children: [
-            for (final option in question.options)
-              ChoiceTile(
-                label: option.text,
-                selected: answer?.optionId == option.id,
-                onTap: () => onChanged(
-                  SurveyAnswer(questionId: question.id, optionId: option.id),
-                ),
-              ),
-          ],
-        );
-    }
-  }
-}
-
-class _RatingChip extends StatelessWidget {
-  const _RatingChip({
-    required this.value,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final int value;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: selected ? AppColors.amber : Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: selected ? AppColors.amber : AppColors.border),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: SizedBox(
-          width: 52,
-          height: 52,
-          child: Center(
-            child: Text(
-              '$value',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: selected ? Colors.white : AppColors.ink,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

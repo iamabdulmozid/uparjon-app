@@ -79,26 +79,55 @@ class EarnRepository {
   Future<List<VideoAd>> adsFeed() =>
       _cardList('/mobile/ads/feed', VideoAd.fromJson);
 
-  /// `POST /mobile/ads/{id}/view` — records a watch and claims the reward.
+  /// `GET /ads/{id}` — the full ad, with its type, questions and attempt
+  /// rules. The feed card has none of those.
+  Future<VideoAd> ad(String id) async {
+    final data = await _api.get('/ads/$id');
+    return VideoAd.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// `POST /mobile/ads/{id}/view` — records the watch.
   ///
-  /// [answerOptionId] is the option picked for the ad's follow-up question.
-  /// `MobileAdViewRequest` has no such field yet; it is only sent for ads
-  /// that carry a question, which none do until the API adds them.
+  /// For a plain ad this claims the reward. For an ad with questions it only
+  /// marks the view `COMPLETED`: that is the prerequisite the answer
+  /// submission checks, and the reward comes from [submitAdAnswers].
   Future<AdView> submitAdView({
     required String adId,
     required int watchedSeconds,
-    String? answerOptionId,
+    String? idempotencyKey,
   }) async {
     final data = await _api.post(
       '/mobile/ads/$adId/view',
-      data: {
-        'watchedDurationSeconds': watchedSeconds,
-        'deviceId': _device.id,
-        'answerOptionId': ?answerOptionId,
-      },
-      idempotencyKey: Ids.newId(),
+      data: {'watchedDurationSeconds': watchedSeconds, 'deviceId': _device.id},
+      idempotencyKey: idempotencyKey ?? Ids.newId(),
     );
     return AdView.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// `POST /quizzes/submit` (graded) or `POST /surveys/submit` — answers an
+  /// ad's questions once its view is recorded; the server refuses with a
+  /// 400 otherwise.
+  ///
+  /// Both take `QuizSubmissionRequest {adId, answers[{questionId, optionId,
+  /// textAnswer}]}` — `textAnswer`, although the integration guide spells it
+  /// `answerText`. Pass the same [idempotencyKey] when retrying one attempt.
+  Future<AdAssessment> submitAdAnswers({
+    required VideoAd ad,
+    required List<SurveyAnswer> answers,
+    required String idempotencyKey,
+  }) async {
+    final data = await _api.post(
+      ad.isSurvey ? '/surveys/submit' : '/quizzes/submit',
+      data: {
+        'adId': ad.adId,
+        'answers': answers.map((a) => a.toJson()).toList(),
+      },
+      idempotencyKey: idempotencyKey,
+    );
+    return AdAssessment.fromJson(
+      data is Map ? data.cast<String, dynamic>() : const {},
+      passedByDefault: ad.isSurvey,
+    );
   }
 
   // ----------------------------------------------------------------- quizzes

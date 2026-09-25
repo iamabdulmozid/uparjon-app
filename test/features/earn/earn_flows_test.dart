@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uparjon/app/router/routes.dart';
+import 'package:uparjon/core/ui/app_button.dart';
 import 'package:uparjon/features/earn/presentation/campaign_screen.dart';
 import 'package:uparjon/features/earn/presentation/task_list_screen.dart';
 import 'package:uparjon/features/earn/presentation/watch_ad_screen.dart';
@@ -209,66 +210,321 @@ void main() {
       expect(find.text('Congratulation!'), findsOneWidget);
     });
 
-    group('with a follow-up question', () {
-      const quizAd = {
-        ...regalAd,
-        'question': {
-          'id': 'aq-1',
-          'questionText': 'What was the percentage of discount on the Ad?',
-          'options': [
-            {'id': 'p10', 'optionText': '10%'},
-            {'id': 'p15', 'optionText': '15%'},
-          ],
-        },
+    // Questions come from `GET /ads/{id}` (the feed card has none). The view
+    // is recorded first — the server refuses answers without it — and the
+    // answers are then graded by `/quizzes/submit` or kept by
+    // `/surveys/submit`. See docs/mobile-flutter-media-quiz-integration-guide.md.
+    group('with questions', () {
+      const discount = {
+        'id': 'q1',
+        'questionText': 'What was the percentage of discount on the Ad?',
+        'questionType': 'SINGLE_CHOICE',
+        'orderIndex': 1,
+        'options': [
+          {'id': 'p10', 'optionText': '10%'},
+          {'id': 'p15', 'optionText': '15%'},
+        ],
+      };
+      const brand = {
+        'id': 'q2',
+        'questionText': 'Which brand was featured?',
+        'questionType': 'SINGLE_CHOICE',
+        'orderIndex': 2,
+        'options': [
+          {'id': 'regal', 'optionText': 'Regal'},
+          {'id': 'hatil', 'optionText': 'Hatil'},
+        ],
       };
 
-      testWidgets('asks after the video and sends the answer', (tester) async {
-        final api = adApi(ad: quizAd);
-        await open(tester, api, Routes.watchAd, 'ad-1');
+      Map<String, dynamic> adDetails({
+        String adType = 'QUIZ',
+        List<Map<String, dynamic>> questions = const [discount],
+        int? maxAttempts,
+        String status = 'ACTIVE',
+      }) => {
+        'id': 'ad-1',
+        'title': 'Regal Furniture',
+        'adType': adType,
+        'status': status,
+        'mediaUrl': 'https://cdn.test/regal.mp4',
+        'durationSeconds': 3,
+        'rewardAmount': 10,
+        'passingScore': 100,
+        'maxAttempts': ?maxAttempts,
+        'questions': questions,
+      };
 
-        expect(
-          find.textContaining('After the video, a question will appear'),
-          findsOneWidget,
-        );
+      FakeApi questionApi({
+        Map<String, dynamic>? details,
+        FakeReply? view,
+        List<FakeReply>? quiz,
+      }) => FakeApi(
+        {
+          ...earnRoutes(ads: [regalAd]),
+          'GET /ads/ad-1': ok(details ?? adDetails()),
+          'POST /mobile/ads/ad-1/view':
+              view ?? ok({'status': 'COMPLETED', 'rewardEligible': false}),
+          'POST /surveys/submit': rawJson({
+            'passed': true,
+            'totalQuestions': 2,
+            'rewardTriggered': true,
+          }),
+        },
+        sequences: {
+          'POST /quizzes/submit':
+              quiz ??
+              [
+                rawJson({
+                  'passed': true,
+                  'score': 1,
+                  'totalQuestions': 1,
+                  'pointsEarned': 10,
+                  'rewardTriggered': true,
+                }),
+              ],
+        },
+      );
+
+      Future<void> watchToTheEnd(WidgetTester tester) async {
         await tester.tap(find.byIcon(Icons.play_arrow_rounded));
         await tester.pump(const Duration(seconds: 3));
         await tester.pumpAndSettle();
+      }
 
-        // The view is only reported once the question is answered.
+      Future<void> press(WidgetTester tester, String label) async {
+        await tester.tap(find.widgetWithText(InkWell, label).last);
+        await tester.pumpAndSettle();
+      }
+
+      VoidCallback? handlerOf(WidgetTester tester, String label) => tester
+          .widget<AppButton>(find.widgetWithText(AppButton, label))
+          .onPressed;
+
+      List<Object?> keysSentTo(FakeApi api, String key) => [
+        for (final call in api.calls)
+          if ('${call.method} ${call.path}' == key)
+            call.headers['Idempotency-Key'],
+      ];
+
+      testWidgets('records the view, walks the questions, submits for '
+          'grading', (tester) async {
+        final api = questionApi(
+          details: adDetails(questions: [brand, discount]),
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+
+        expect(
+          find.textContaining('After the video, 2 questions will appear'),
+          findsOneWidget,
+        );
+        await watchToTheEnd(tester);
+
+        // The view went first, without any answer in it.
+        final view = api.bodyOf('POST /mobile/ads/ad-1/view')!;
+        expect(
+          view.keys,
+          unorderedEquals(['watchedDurationSeconds', 'deviceId']),
+        );
+        expect(view['watchedDurationSeconds'], 3);
+        expect(api.callCount('POST /quizzes/submit'), 0);
+
+        // Ordered by orderIndex, not by arrival.
+        expect(find.text('Question 1 of 2'), findsOneWidget);
         expect(
           find.text('What was the percentage of discount on the Ad?'),
           findsOneWidget,
         );
-        expect(api.bodyOf('POST /mobile/ads/ad-1/view'), isNull);
+        expect(handlerOf(tester, 'Next'), isNull);
 
         await tester.tap(find.text('15%'));
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(InkWell, 'Submit'));
-        await tester.pumpAndSettle();
+        await press(tester, 'Next');
+        expect(find.text('Question 2 of 2'), findsOneWidget);
 
-        final body = api.bodyOf('POST /mobile/ads/ad-1/view')!;
-        expect(body['watchedDurationSeconds'], 3);
-        expect(body['answerOptionId'], 'p15');
+        // Back keeps the earlier answer.
+        await press(tester, 'Back');
+        expect(handlerOf(tester, 'Next'), isNotNull);
+        await press(tester, 'Next');
+
+        await tester.tap(find.text('Regal'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Submit');
+
+        expect(api.bodyOf('POST /quizzes/submit'), {
+          'adId': 'ad-1',
+          'answers': [
+            {'questionId': 'q1', 'optionId': 'p15'},
+            {'questionId': 'q2', 'optionId': 'regal'},
+          ],
+        });
+        expect(keysSentTo(api, 'POST /quizzes/submit').single, isNotNull);
+        expect(api.callCount('POST /surveys/submit'), 0);
         expect(find.text('Congratulation!'), findsOneWidget);
-        expect(find.textContaining('Your answer is correct'), findsOneWidget);
+        expect(find.textContaining('Your answers are correct'), findsOneWidget);
       });
 
-      testWidgets('a rejected answer shows Wrong Answer!', (tester) async {
-        final api = adApi(
-          ad: quizAd,
+      testWidgets('a wrong answer can be retried while attempts remain', (
+        tester,
+      ) async {
+        final api = questionApi(
+          details: adDetails(maxAttempts: 2),
+          quiz: [
+            rawJson({'passed': false, 'score': 0, 'rewardTriggered': false}),
+            rawJson({'passed': true, 'score': 1, 'rewardTriggered': true}),
+          ],
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+        await watchToTheEnd(tester);
+
+        await tester.tap(find.text('10%'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Submit');
+        expect(find.text('Wrong Answer!'), findsOneWidget);
+
+        await tester.tap(find.text('Try again'));
+        await tester.pumpAndSettle();
+        // A fresh attempt: nothing picked, and the view is not re-sent.
+        expect(handlerOf(tester, 'Submit'), isNull);
+        expect(api.callCount('POST /mobile/ads/ad-1/view'), 1);
+
+        await tester.tap(find.text('15%'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Submit');
+
+        expect(find.text('Congratulation!'), findsOneWidget);
+        final keys = keysSentTo(api, 'POST /quizzes/submit');
+        expect(keys, hasLength(2));
+        expect(keys.first, isNot(keys.last));
+      });
+
+      testWidgets('the last attempt ends on Wrong Answer!', (tester) async {
+        final api = questionApi(
+          quiz: [
+            rawJson({'passed': false, 'score': 0, 'rewardTriggered': false}),
+          ],
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+        await watchToTheEnd(tester);
+        await tester.tap(find.text('10%'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Submit');
+
+        expect(find.text('Wrong Answer!'), findsOneWidget);
+        expect(find.textContaining('the reward this time'), findsOneWidget);
+        expect(find.text('Try again'), findsNothing);
+
+        await tester.tap(find.text('Continue'));
+        await tester.pumpAndSettle();
+        expect(find.byType(WatchAdScreen), findsNothing);
+      });
+
+      testWidgets('a dropped submission is retried with the same key', (
+        tester,
+      ) async {
+        final api = questionApi(
+          quiz: [
+            (status: 503, body: {'success': false, 'message': 'Down'}),
+            rawJson({'passed': true, 'score': 1, 'rewardTriggered': true}),
+          ],
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+        await watchToTheEnd(tester);
+        await tester.tap(find.text('15%'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Submit');
+
+        expect(find.text('Could not verify'), findsOneWidget);
+        await tester.tap(find.text('Try again'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Congratulation!'), findsOneWidget);
+        final keys = keysSentTo(api, 'POST /quizzes/submit');
+        expect(keys, hasLength(2));
+        expect(keys.first, keys.last);
+      });
+
+      testWidgets('a refused view never reaches the questions', (tester) async {
+        final api = questionApi(
           view: ok({'status': 'FAILED', 'rewardEligible': false}),
         );
         await open(tester, api, Routes.watchAd, 'ad-1');
+        await watchToTheEnd(tester);
 
-        await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-        await tester.pump(const Duration(seconds: 3));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('10%'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(InkWell, 'Submit'));
-        await tester.pumpAndSettle();
+        expect(find.text('Not rewarded'), findsOneWidget);
+        expect(
+          find.text('What was the percentage of discount on the Ad?'),
+          findsNothing,
+        );
+        expect(api.callCount('POST /quizzes/submit'), 0);
+      });
 
-        expect(find.text('Wrong Answer!'), findsOneWidget);
+      testWidgets('a survey ad sends its feedback to /surveys/submit', (
+        tester,
+      ) async {
+        final api = questionApi(
+          details: adDetails(
+            adType: 'SURVEY',
+            questions: [
+              {
+                'id': 's1',
+                'questionText': 'Rate the ad',
+                'questionType': 'RATING',
+                'isRequired': true,
+                'minVal': 1,
+                'maxVal': 5,
+              },
+              {
+                'id': 's2',
+                'questionText': 'Anything else?',
+                'questionType': 'TEXT',
+                'isRequired': false,
+              },
+            ],
+          ),
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+        await watchToTheEnd(tester);
+
+        expect(handlerOf(tester, 'Next'), isNull);
+        await tester.tap(find.text('4'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Next');
+
+        // Optional: Submit works with the box left empty.
+        await press(tester, 'Submit');
+
+        expect(api.bodyOf('POST /surveys/submit'), {
+          'adId': 'ad-1',
+          'answers': [
+            {'questionId': 's1', 'textAnswer': '4'},
+          ],
+        });
+        expect(api.callCount('POST /quizzes/submit'), 0);
+        expect(find.text('Congratulation!'), findsOneWidget);
+        expect(find.textContaining('Thanks for your feedback'), findsOneWidget);
+      });
+
+      testWidgets('an ad taken off sale is not played', (tester) async {
+        final api = questionApi(details: adDetails(status: 'PAUSED'));
+        await open(tester, api, Routes.watchAd, 'ad-1');
+
+        expect(find.text('This ad is no longer available.'), findsOneWidget);
+        expect(find.text('Watch till the end'), findsNothing);
+      });
+
+      testWidgets('without ad details the feed card still plays', (
+        tester,
+      ) async {
+        // `GET /ads/ad-1` is not routed, so it answers 404.
+        final api = adApi();
+        await open(tester, api, Routes.watchAd, 'ad-1');
+
+        expect(
+          find.textContaining('Watch the full video without skipping'),
+          findsOneWidget,
+        );
+        await watchToTheEnd(tester);
+        expect(find.text('Congratulation!'), findsOneWidget);
       });
     });
   });
