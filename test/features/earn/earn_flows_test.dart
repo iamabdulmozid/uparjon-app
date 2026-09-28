@@ -443,6 +443,38 @@ void main() {
         expect(keys.first, keys.last);
       });
 
+      testWidgets('a claimed ad says so instead of a generic error', (
+        tester,
+      ) async {
+        final api = questionApi(
+          quiz: [
+            apiError(
+              'ALREADY_CLAIMED',
+              status: 409,
+              message:
+                  'You have already completed and claimed the reward for '
+                  'this ad',
+            ),
+          ],
+        );
+        await open(tester, api, Routes.watchAd, 'ad-1');
+        await watchToTheEnd(tester);
+        await tester.tap(find.text('15%'));
+        await tester.pumpAndSettle();
+        await press(tester, 'Submit');
+
+        expect(
+          find.text('You have already been rewarded for this one.'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('This action is not available right now.'),
+          findsNothing,
+        );
+        // A settled claim is final — no retry offered.
+        expect(find.text('Try again'), findsNothing);
+      });
+
       testWidgets('a refused view never reaches the questions', (tester) async {
         final api = questionApi(
           view: ok({'status': 'FAILED', 'rewardEligible': false}),

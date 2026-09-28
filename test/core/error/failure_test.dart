@@ -110,6 +110,47 @@ void main() {
       expect(failure.message, isNot(contains('Required')));
     });
 
+    // Media quiz guide v2 answers a repeated claim with a 409. Mapped by
+    // status alone it would read as a form validation error.
+    test('an ALREADY_CLAIMED conflict says the reward was paid', () {
+      final failure = Failure.from(
+        const AppException(
+          AppExceptionKind.badRequest,
+          errorCode: ApiErrorCodes.alreadyClaimed,
+          message:
+              'You have already completed and claimed the reward for this ad',
+          statusCode: 409,
+        ),
+      );
+
+      expect(failure, isA<BusinessFailure>());
+      expect(failure.code, ApiErrorCodes.alreadyClaimed);
+      expect(failure.message, 'You have already been rewarded for this one.');
+    });
+
+    for (final (text, expected) in [
+      (
+        'Reward already exists for this ad view',
+        'You have already been rewarded for this one.',
+      ),
+      (
+        'You must view the ad before submitting answers',
+        'Please watch the whole video to earn this reward.',
+      ),
+    ]) {
+      test('maps the ad quiz rule "$text"', () {
+        final failure = Failure.from(
+          AppException(
+            AppExceptionKind.server,
+            errorCode: ApiErrorCodes.illegalState,
+            message: text,
+            statusCode: 500,
+          ),
+        );
+        expect(failure.message, expected);
+      });
+    }
+
     test('keeps other illegal-state failures generic', () {
       final failure = Failure.from(
         const AppException(

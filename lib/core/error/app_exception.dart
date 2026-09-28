@@ -76,6 +76,10 @@ abstract final class ApiErrorCodes {
   /// reward-producing submit answers
   /// `Duplicate transaction: … has already been processed`.
   static const String illegalState = 'ILLEGAL_STATE';
+
+  /// `409`: the reward for this ad was already claimed — from a second view
+  /// or a repeated answer submission (media quiz guide v2).
+  static const String alreadyClaimed = 'ALREADY_CLAIMED';
   static const String campaignNotEligible = 'CAMPAIGN_NOT_ELIGIBLE';
   static const String insufficientBalance = 'INSUFFICIENT_BALANCE';
 }

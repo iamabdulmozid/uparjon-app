@@ -76,6 +76,10 @@ sealed class Failure {
         serverMessage ?? 'This action is not available right now.',
         code: code!,
       ),
+      ApiErrorCodes.alreadyClaimed => BusinessFailure(
+        _alreadyRewarded,
+        code: code!,
+      ),
       ApiErrorCodes.illegalState => _illegalState(error.message, code!),
       _ => switch (error.kind) {
         AppExceptionKind.network => const NetworkFailure(),
@@ -107,6 +111,9 @@ sealed class Failure {
   /// transaction: referenceId survey:… has already been processed`,
   /// `Insufficient watch duration. Required: 24s, watched: 10s`), so it is
   /// matched here but never shown.
+  static const _alreadyRewarded =
+      'You have already been rewarded for this one.';
+
   static Failure _illegalState(String? serverText, String code) {
     final text = serverText ?? '';
 
@@ -114,9 +121,14 @@ sealed class Failure {
       _
           when text.contains('already been rewarded') ||
               text.contains('already been processed') ||
-              text.contains('Duplicate transaction') =>
-        'You have already been rewarded for this one.',
-      _ when text.contains('Insufficient watch duration') =>
+              text.contains('Duplicate transaction') ||
+              text.contains('Reward already exists') =>
+        _alreadyRewarded,
+      // "You must view the ad before submitting answers" — the guide
+      // promises a 400 `INVALID_ARGUMENT`, staging sends this.
+      _
+          when text.contains('Insufficient watch duration') ||
+              text.contains('must view the ad') =>
         'Please watch the whole video to earn this reward.',
       _ => 'This action is not available right now.',
     };
