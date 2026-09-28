@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router/routes.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/error/failure.dart';
+import '../../../core/services/snackbar_service.dart';
 import '../../../core/ui/list_state_message.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
@@ -18,7 +19,10 @@ import 'widgets/task_overview_dialog.dart';
 /// One earning category (Figma: "Uparjon - Ad list", "Uparjon - Survey list"):
 /// today's earning, the tasks still open, and the ones already completed.
 ///
-/// Tapping a task opens its overview; Start pushes the runner screen.
+/// Tapping a task opens its overview; Start pushes the runner screen. Tasks
+/// the user already claimed stay listed (the API keeps them as history), but
+/// sit last, carry a Completed badge, and only explain themselves when
+/// tapped.
 class TaskListScreen extends ConsumerWidget {
   const TaskListScreen({super.key, required this.kind});
 
@@ -74,7 +78,9 @@ class TaskListScreen extends ConsumerWidget {
                       child: EarnValueStat(
                         value: items.value == null
                             ? '—'
-                            : Formatters.twoDigits(items.value!.length),
+                            : Formatters.twoDigits(
+                                items.value!.where((i) => !i.completed).length,
+                              ),
                         label: kind.countLabel,
                       ),
                     ),
@@ -116,6 +122,7 @@ class TaskListScreen extends ConsumerWidget {
                           iconBackground: kind.tint,
                           subtitle: item.subtitle,
                           reward: Formatters.rewardOrNull(item.reward),
+                          completed: item.completed,
                           onTap: () => _open(context, item),
                         ),
                     ],
@@ -157,12 +164,24 @@ class TaskListScreen extends ConsumerWidget {
   }
 
   Future<void> _open(BuildContext context, _TaskItem item) async {
+    if (item.completed) {
+      SnackbarService.showInfo(kind.alreadyClaimedMessage);
+      return;
+    }
     final start = await showOverviewDialog(context, item.overview);
     if (!start || !context.mounted) return;
     await context.pushNamed(item.route, pathParameters: {'id': item.id});
   }
 
-  AsyncValue<List<_TaskItem>> _itemsOf(WidgetRef ref) => switch (kind) {
+  /// Open tasks first, claimed ones after, each group in feed order.
+  AsyncValue<List<_TaskItem>> _itemsOf(WidgetRef ref) => _feedOf(ref).whenData(
+    (items) => [
+      ...items.where((i) => !i.completed),
+      ...items.where((i) => i.completed),
+    ],
+  );
+
+  AsyncValue<List<_TaskItem>> _feedOf(WidgetRef ref) => switch (kind) {
     EarnTaskKind.ads =>
       ref
           .watch(adsFeedProvider)
@@ -202,6 +221,7 @@ class _TaskItem {
     required this.overview,
     this.subtitle,
     this.reward,
+    this.completed = false,
   });
 
   final String id;
@@ -211,11 +231,15 @@ class _TaskItem {
   final String? subtitle;
   final num? reward;
 
+  /// Already claimed by this user.
+  final bool completed;
+
   factory _TaskItem.ad(VideoAd ad) => _TaskItem(
     id: ad.adId,
     title: ad.title,
     route: Routes.watchAd,
     reward: ad.reward,
+    completed: ad.isCompleted,
     subtitle: ad.duration == null
         ? null
         : Formatters.approxDuration(ad.duration!),
@@ -344,6 +368,7 @@ class _TaskItem {
       title: campaign.title,
       route: Routes.campaign,
       reward: campaign.rewardAmount,
+      completed: campaign.isCompleted,
       subtitle: subtitle.isEmpty ? null : subtitle,
       overview: CampaignOverviewDialog(card: campaign),
     );

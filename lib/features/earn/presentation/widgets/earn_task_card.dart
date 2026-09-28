@@ -7,6 +7,8 @@ import '../../../../core/constants/app_assets.dart';
 /// A task row in the earning lists (Figma: "Uparjon - Ad list").
 ///
 /// Shows what the task is, roughly how long it takes, and what it pays.
+/// A [completed] task — one the user already claimed — is dimmed and badged
+/// instead of offering its reward.
 class EarnTaskCard extends StatelessWidget {
   const EarnTaskCard({
     super.key,
@@ -17,6 +19,7 @@ class EarnTaskCard extends StatelessWidget {
     this.reward,
     this.iconColor = AppColors.blue,
     this.iconBackground = AppColors.blueTint,
+    this.completed = false,
   });
 
   final String title;
@@ -28,10 +31,11 @@ class EarnTaskCard extends StatelessWidget {
   final String? reward;
   final Color iconColor;
   final Color iconBackground;
+  final bool completed;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final card = Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -70,7 +74,7 @@ class EarnTaskCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                if (subtitle != null || reward != null) ...[
+                if (subtitle != null || reward != null || completed) ...[
                   const SizedBox(height: 12),
                   const Divider(height: 1, color: AppColors.border),
                   const SizedBox(height: 10),
@@ -85,7 +89,9 @@ class EarnTaskCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (reward != null)
+                      if (completed)
+                        const _CompletedBadge()
+                      else if (reward != null)
                         Text(
                           reward!,
                           style: const TextStyle(
@@ -101,6 +107,43 @@ class EarnTaskCard extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+    return completed
+        ? Semantics(
+            label: 'Completed',
+            child: Opacity(opacity: 0.7, child: card),
+          )
+        : card;
+  }
+}
+
+/// "✓ Completed" pill on a task the user already claimed.
+class _CompletedBadge extends StatelessWidget {
+  const _CompletedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.greenTint,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.check_rounded, size: 14, color: AppColors.greenDeep),
+          SizedBox(width: 4),
+          Text(
+            'Completed',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.greenDeep,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -89,6 +89,10 @@ enum EarnTaskKind {
   /// Heading over the open tasks ("On going survey", "Available Quiz").
   final String listHeading;
 
+  /// Shown when the user taps a task they already claimed (API spec §8.3.1).
+  String get alreadyClaimedMessage =>
+      'You have already claimed your reward for this ${noun.toLowerCase()}.';
+
   static EarnTaskKind? fromSlug(String slug) =>
       values.where((kind) => kind.slug == slug).firstOrNull;
 }

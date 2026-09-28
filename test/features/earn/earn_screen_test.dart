@@ -202,4 +202,105 @@ void main() {
       expect(find.text('Overview'), findsNothing);
     });
   });
+
+  // API spec §8.1 / §8.3.1: what the user already claimed stays in the feed
+  // as history, flagged `viewed: true` / `status: "COMPLETED"`.
+  group('claimed tasks', () {
+    // The spec's feed item, with every alias it sends.
+    const claimedAd = {
+      'id': 'ad-2',
+      'adId': 'ad-2',
+      'title': 'Apex Footwear September Collection',
+      'mediaUrl': 'https://cdn.test/apex.mp4',
+      'videoUrl': 'https://cdn.test/apex.mp4',
+      'durationSeconds': 45,
+      'duration': 45,
+      'rewardAmount': 20,
+      'reward': 20,
+      'viewed': true,
+      'status': 'COMPLETED',
+    };
+    const openAd = {...regalAd, 'viewed': false, 'status': 'ACTIVE'};
+
+    testWidgets('are badged, listed last, and not counted as remaining', (
+      tester,
+    ) async {
+      await openList(tester, earnApi(ads: [claimedAd, openAd]), 'ads');
+
+      expect(find.text('Completed'), findsOneWidget);
+      // One open ad: the reward shows only on it.
+      expect(find.text('+ ৳10.00'), findsOneWidget);
+      expect(find.text('+ ৳20.00'), findsNothing);
+      expect(find.text('01'), findsOneWidget);
+
+      final open = tester.getTopLeft(find.text(regalAd['title']! as String));
+      final claimed = tester.getTopLeft(
+        find.text(claimedAd['title']! as String),
+      );
+      expect(open.dy, lessThan(claimed.dy));
+    });
+
+    testWidgets('tapping one explains instead of starting it', (tester) async {
+      final api = earnApi(ads: [claimedAd]);
+      await openList(tester, api, 'ads');
+
+      await tester.tap(find.text(claimedAd['title']! as String));
+      await tester.pump();
+
+      expect(
+        find.text('You have already claimed your reward for this ad.'),
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Overview'), findsNothing);
+      expect(api.callCount('GET /ads/ad-2'), 0);
+    });
+
+    testWidgets('do not show as pending on the landing tiles', (tester) async {
+      await openEarn(
+        tester,
+        earnApi(
+          ads: [claimedAd],
+          campaigns: [
+            {
+              'id': 'c-1',
+              'title': 'Walton Smart Electronics',
+              'campaignType': 'VIDEO',
+              'rewardAmount': 15,
+              'status': 'COMPLETED',
+            },
+          ],
+        ),
+      );
+
+      expect(find.text('Pending:'), findsNothing);
+      expect(find.text('No task for today!'), findsNWidgets(4));
+    });
+
+    testWidgets('a completed campaign cannot be started again', (tester) async {
+      final api = earnApi(
+        campaigns: [
+          {
+            'id': 'c-1',
+            'title': 'Walton Smart Electronics',
+            'campaignType': 'VIDEO',
+            'rewardAmount': 15,
+            'status': 'COMPLETED',
+          },
+        ],
+      );
+      await openList(tester, api, 'campaigns');
+
+      expect(find.text('Completed'), findsOneWidget);
+      await tester.tap(find.text('Walton Smart Electronics'));
+      await tester.pump();
+
+      expect(
+        find.text('You have already claimed your reward for this campaign.'),
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
+      expect(api.callCount('POST /mobile/campaigns/c-1/start'), 0);
+    });
+  });
 }

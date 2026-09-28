@@ -109,8 +109,10 @@ class EarnRepository {
   /// 400 otherwise.
   ///
   /// Both take `QuizSubmissionRequest {adId, answers[{questionId, optionId,
-  /// textAnswer}]}` — `textAnswer`, although the integration guide spells it
-  /// `answerText`. Pass the same [idempotencyKey] when retrying one attempt.
+  /// textAnswer}]}`. The spec (§10.3) names the text `answerText`; since
+  /// 2026-09-28 the server accepts both, and `textAnswer` is kept because
+  /// the standalone survey submit shares [SurveyAnswer]. Pass the same
+  /// [idempotencyKey] when retrying one attempt.
   Future<AdAssessment> submitAdAnswers({
     required VideoAd ad,
     required List<SurveyAnswer> answers,

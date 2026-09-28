@@ -210,10 +210,39 @@ void main() {
       expect(find.text('Congratulation!'), findsOneWidget);
     });
 
+    // API spec §8.3.2: for a plain ad, COMPLETED now means paid.
+    testWidgets('a completed plain view with rewardEarned is a reward', (
+      tester,
+    ) async {
+      final api = adApi(view: ok({'status': 'COMPLETED', 'rewardEarned': 10}));
+      await open(tester, api, Routes.watchAd, 'ad-1');
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Congratulation!'), findsOneWidget);
+    });
+
+    testWidgets('an ad the feed marks claimed is not played again', (
+      tester,
+    ) async {
+      final api = adApi(
+        ad: {...regalAd, 'viewed': true, 'status': 'COMPLETED'},
+      );
+      await open(tester, api, Routes.watchAd, 'ad-1');
+
+      expect(
+        find.text('You have already claimed your reward for this ad.'),
+        findsOneWidget,
+      );
+      expect(find.text('Watch till the end'), findsNothing);
+      expect(api.callCount('POST /mobile/ads/ad-1/view'), 0);
+    });
+
     // Questions come from `GET /ads/{id}` (the feed card has none). The view
     // is recorded first — the server refuses answers without it — and the
     // answers are then graded by `/quizzes/submit` or kept by
-    // `/surveys/submit`. See docs/mobile-flutter-media-quiz-integration-guide.md.
+    // `/surveys/submit`. See docs/mobile-api-specification.md §8.5.
     group('with questions', () {
       const discount = {
         'id': 'q1',

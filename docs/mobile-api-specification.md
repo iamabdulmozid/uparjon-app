@@ -5,6 +5,9 @@
 > **Default Currency**: BDT (`৳`)  
 > **Backend Base URL (Local)**: `http://localhost:8080/api/v1`  
 > **Dev Proxy Base URL**: `http://localhost:4200/api/v1`  
+> **Staging Base URL**: `https://api.avytor.com/api/v1` (Swagger UI: `https://api.avytor.com/swagger-ui.html`)  
+> **Production Base URL**: `https://api.uparjonx.com/api/v1` (planned — not live as of 2026-09-28)  
+> **Last Updated**: 2026-09-28 — merged the *Media Watch & Interactive Questions* Flutter integration guide (see §8.5 and Appendix A); this is now the single reference for all mobile app APIs.  
 
 ---
 
@@ -16,14 +19,16 @@
 5. [Wallet & Transaction History](#5-wallet--transaction-history)
 6. [Deposits & Payment Gateways](#6-deposits--payment-gateways)
 7. [Withdrawals & Payout Requests](#7-withdrawals--payout-requests)
-8. [Campaigns & Video Ads](#8-campaigns--video-ads)
+8. [Campaigns, Media Ads & Interactive Viewing](#8-campaigns-media-ads--interactive-viewing)
+   - [8.5 Media Watch & Interactive Questions Flow](#85-media-watch--interactive-questions-flow)
 9. [Micro Tasks & Social Tasks](#9-micro-tasks--social-tasks)
-10. [Quizzes & Daily Assessments](#10-quizzes--daily-assessments)
+10. [Quizzes, Surveys & Interactive Assessments](#10-quizzes-surveys--interactive-assessments)
 11. [Push Notifications & Device Tokens](#11-push-notifications--device-tokens)
 12. [Geographic Master Data & Mobile Operators](#12-geographic-master-data--mobile-operators)
 13. [Media Storage & File Uploads](#13-media-storage--file-uploads)
 14. [E-Commerce Storefront (Catalog, Cart, Checkout)](#14-e-commerce-storefront-catalog-cart-checkout)
 15. [Quick Reference Endpoint Matrix](#15-quick-reference-endpoint-matrix)
+16. [Appendix A: Flutter Reference Implementation — Media Watch & Questions](#appendix-a-flutter-reference-implementation--media-watch--questions)
 
 ---
 
@@ -50,11 +55,13 @@ Every JSON response adheres to this envelope:
 ```json
 {
   "success": false,
+  "errorCode": "INVALID_ARGUMENT",
   "message": "Invalid credentials or validation error",
   "data": null,
   "timestamp": "2026-09-12T18:00:00"
 }
 ```
+- `errorCode` is the stable, machine-readable reason (e.g. `INVALID_ARGUMENT`, `ALREADY_CLAIMED`, `UNAUTHORIZED`). Clients should branch on `errorCode`, never on `message`.
 
 ### 1.4 Test Accounts & OTP Configuration
 - **Fixed OTP (Dev/Testing)**: `123456`
@@ -63,6 +70,8 @@ Every JSON response adheres to this envelope:
   - `user@test.com` — Normal user (KYC incomplete, zero balance)
   - `kyc@test.com` — Verified user (KYC approved, starter balance)
   - `wallet@test.com` — High wallet balance user (KYC approved)
+  - `admin@test.com` — Admin; can create & publish campaigns from the web dashboard
+- The fixed OTP `123456` is accepted for all phone verification flows, so integration tests can run without a live SMS gateway.
 
 ---
 
@@ -829,12 +838,12 @@ Every JSON response adheres to this envelope:
 
 ---
 
-## 8. Campaigns & Video Ads
+## 8. Campaigns, Media Ads & Interactive Viewing
 
 ### 8.1 List Campaigns (Paginated)
 - **Method**: `GET`
 - **URL**: `/api/v1/mobile/campaigns`
-- **Query Params**: `page` (default: `0`), `size` (default: `20`)
+- **Query Params**: `page` (default: `0`), `size` (default: `20`), `type` (optional)
 - **Auth**: `Bearer <Token>`
 - **Response (`200 OK`)**:
 ```json
@@ -851,14 +860,27 @@ Every JSON response adheres to this envelope:
         "rewardAmount": 75.00,
         "durationSeconds": 30,
         "status": "ACTIVE"
+      },
+      {
+        "id": "c9e8d7c6-b5a4-3210-fedc-ba9876543210",
+        "title": "Walton Smart Electronics",
+        "thumbnailUrl": "https://storage.uparjon.com/ads/walton-thumb.jpg",
+        "type": "VIDEO",
+        "rewardAmount": 15.00,
+        "durationSeconds": 30,
+        "status": "COMPLETED"
       }
     ],
-    "totalElements": 1,
+    "totalElements": 2,
     "totalPages": 1
   },
   "timestamp": "2026-09-12T18:00:00"
 }
 ```
+- **Campaign Status & UI Badging**:
+  - `status`: Returns `"ACTIVE"` for available campaigns, or `"COMPLETED"` if the user has already participated and claimed the reward.
+  - **Completed Campaigns Retention**: Completed campaigns remain visible in the feed so users can review their activity history instead of disappearing.
+  - **Mobile UI**: Render a `[Completed]` badge on cards with `status == "COMPLETED"` and disable starting a new session.
 
 ---
 
@@ -871,15 +893,245 @@ Every JSON response adheres to this envelope:
 ---
 
 ### 8.3 Watch Video Ads Feed & Track View
-- **Feed**: `GET /api/v1/mobile/ads/feed`
-- **Track View**: `POST /api/v1/mobile/ads/{id}/view`
+
+#### 8.3.1 Video Ads Feed
+Retrieves the list of active video advertisements with per-user completion tags.
+
+- **Method**: `GET`
+- **URL**: `/api/v1/mobile/ads/feed`
+- **Auth**: `Bearer <Token>`
+- **Response (`200 OK`)**:
+```json
+[
+  {
+    "id": "11111111-2222-3333-4444-555555555555",
+    "adId": "11111111-2222-3333-4444-555555555555",
+    "title": "Walton Primo Smartphone Promo",
+    "mediaUrl": "https://storage.uparjon.com/ads/walton-promo.mp4",
+    "videoUrl": "https://storage.uparjon.com/ads/walton-promo.mp4",
+    "durationSeconds": 30,
+    "duration": 30,
+    "rewardAmount": 15.00,
+    "reward": 15.00,
+    "viewed": false,
+    "status": "ACTIVE"
+  },
+  {
+    "id": "22222222-3333-4444-5555-666666666666",
+    "adId": "22222222-3333-4444-5555-666666666666",
+    "title": "Apex Footwear September Collection",
+    "mediaUrl": "https://storage.uparjon.com/ads/apex-collection.mp4",
+    "videoUrl": "https://storage.uparjon.com/ads/apex-collection.mp4",
+    "durationSeconds": 45,
+    "duration": 45,
+    "rewardAmount": 20.00,
+    "reward": 20.00,
+    "viewed": true,
+    "status": "COMPLETED"
+  }
+]
+```
+- **New Fields & Flutter UI Handling**:
+  - `viewed` (`boolean`): `true` if the current user has already watched and been rewarded for this ad; `false` otherwise.
+  - `status` (`string`): `"ACTIVE"` or `"COMPLETED"`.
+  - **Backward-Compatible Field Aliases**: Supports both naming conventions (`id` & `adId`, `mediaUrl` & `videoUrl`, `durationSeconds` & `duration`, `rewardAmount` & `reward`).
+  - **Tagging & Badges**: Render a **"Viewed" / "Completed"** tag or badge on the video card when `item.viewed == true` or `item.status == 'COMPLETED'`. When tapped, completed ads should display a toast/modal informing the user that the reward was already claimed: *"You have already claimed your reward for this ad."*
+  - **Distinct Per-Ad Deduplication**: Duplicate tracking is strictly isolated per Ad ID (`ad.id`), **never by video URL**. Multiple campaigns or ads reusing the same media file will never trigger false duplicate claim errors.
+
+#### 8.3.2 Track View Session
+- **Method**: `POST`
+- **URL**: `/api/v1/mobile/ads/{id}/view`
+- **Auth**: `Bearer <Token>`
+- **Identifier Flexibility**: `{id}` in the path can be either the **Ad ID (UUID)** or the **Campaign ID (UUID)**. The backend automatically resolves the campaign's active ad.
 - **Request Body**:
 ```json
 {
-  "watchedDurationSeconds": 30,
+  "watchedDurationSeconds": 15,
   "deviceId": "android-device-987123"
 }
 ```
+- **Response Body (`200 OK`)**:
+```json
+{
+  "id": "view-uuid-1111-2222-3333-4444",
+  "adId": "11111111-2222-3333-4444-555555555555",
+  "status": "COMPLETED",
+  "rewardEarned": 15.00,
+  "startedAt": "2026-09-26T12:00:00Z",
+  "completedAt": "2026-09-26T12:00:30Z"
+}
+```
+- **Lifecycle & Reward Rules**:
+  - **Standard Ads (`VIDEO`, `IMAGE`)**: Calling `/view` after watching the mandatory `durationSeconds` marks the session as `COMPLETED` and immediately credits the user's wallet with the reward.
+  - **Interactive Ads (`QUIZ`, `SURVEY`)**: Calling `/view` marks the ad view session as `COMPLETED` fulfilling the prerequisite watch time, but **does not issue rewards yet**. The user proceeds to answer questions and submit via `/api/v1/quizzes/submit` or `/api/v1/surveys/submit`.
+  - **Idempotency for Interactive Ads**: If the user re-triggers `/view` while taking an interactive quiz, the backend safely reuses the existing completed view session without throwing a duplicate claim error.
+
+---
+
+### 8.4 Get Ad Metadata & Interactive Questions
+Used by the Flutter app to retrieve full ad configuration including media URL, duration timer, passing score, and all interactive questions.
+
+- **Method**: `GET`
+- **URL**: `/api/v1/ads/{id}`
+- **Auth**: `Bearer <Token>`
+- **Identifier Flexibility**: `{id}` in the path can be either the **Ad ID (UUID)** or the **Campaign ID (UUID)**. The backend resolves the active ad under the campaign automatically.
+- **Response (`200 OK`)**:
+```json
+{
+  "success": true,
+  "message": "Ad retrieved successfully",
+  "data": {
+    "id": "11111111-2222-3333-4444-555555555555",
+    "title": "Aarong Dairy Promo",
+    "adType": "QUIZ",
+    "mediaUrl": "https://storage.uparjon.com/ads/aarong-promo.mp4",
+    "durationSeconds": 15,
+    "rewardAmount": 10.00,
+    "passingScore": 100,
+    "maxAttempts": 3,
+    "questions": [
+      {
+        "id": "q-uuid-1111-aaaa-bbbb",
+        "questionText": "What brand was featured in the advertisement?",
+        "questionType": "SINGLE_CHOICE",
+        "orderIndex": 1,
+        "options": [
+          {
+            "id": "opt-uuid-1111-xxxx",
+            "optionText": "Aarong Dairy"
+          },
+          {
+            "id": "opt-uuid-1111-yyyy",
+            "optionText": "Nestle Food"
+          }
+        ]
+      },
+      {
+        "id": "q-uuid-2222-aaaa-bbbb",
+        "questionText": "What percentage discount was offered in the ad?",
+        "questionType": "SINGLE_CHOICE",
+        "orderIndex": 2,
+        "options": [
+          {
+            "id": "opt-uuid-2222-xxxx",
+            "optionText": "20% Discount"
+          },
+          {
+            "id": "opt-uuid-2222-yyyy",
+            "optionText": "5% Discount"
+          }
+        ]
+      }
+    ]
+  },
+  "timestamp": "2026-09-22T18:00:00"
+}
+```
+
+- **Supported Media Formats**:
+  - `mediaUrl` ending with `.mp4`, `.webm`, `.m3u8` $\rightarrow$ Render full-screen video player with playback controls disabled until timer expires.
+  - `mediaUrl` ending with `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` $\rightarrow$ Render high-resolution image/GIF banner with animated countdown circle.
+- **Mandatory Timer Enforcement**:
+  - `durationSeconds`: Minimum required seconds the user must view the media asset before the "Proceed to Questions" button unlocks.
+  - Pausing video or backgrounding the Flutter app pauses the countdown timer.
+
+> [!NOTE]
+> **Anti-Cheat & Answer Protection**: The `GET /api/v1/ads/{id}` response strictly omits grading keys (`correct`, `correctOptionIndex`, `hasCorrectAnswer`, `points`) for earners and non-admin clients. Answers are validated and graded exclusively server-side during `POST /quizzes/submit`.
+> **Ad Type Recognition**: All interactive quiz ads carry `adType: "QUIZ"`. If an ad returned by the feed contains questions and is not a survey, client applications should treat it as a quiz and dispatch answers to `/quizzes/submit`.
+
+---
+
+### 8.5 Media Watch & Interactive Questions Flow
+
+The **Media Watch & Interactive Questions** module empowers advertisers to sponsor multimedia creatives (Video, Image, or animated GIF) accompanied by a mandatory viewing duration (`durationSeconds`). Upon fulfilling this viewing timer, earners are prompted to complete an interactive assessment (either a multi-question Quiz or Survey) to qualify for a wallet reward.
+
+**Key Capabilities for Flutter:**
+1. **Multi-Format Creatives**: Video streaming (`.mp4`, `.m3u8`), high-resolution static images (`.jpg`, `.png`), or animated GIFs.
+2. **Mandatory Timed Viewing**: Strict client-side timer enforced by server-side session checks. The user cannot skip or rush the view.
+3. **Dynamic Multi-Question Answering**: Questions and options carry unique UUIDs generated by the backend. The Flutter app iterates through questions with progress indicators (`Question 1 of N`).
+4. **Prerequisite Gating**: Calling quiz or survey submission before recording view completion results in HTTP `400 Bad Request`.
+5. **Real-Time Auto-Grading & Reward Settlement**: Server grades quiz responses against passing criteria (`passingScore`) and atomically awards wallet balance upon passing.
+
+The endpoints involved: §8.3.1 (feed), §8.4 (ad metadata & questions), §8.3.2 (record the watch), then §10.2 (quiz) or §10.3 (survey). A reference Flutter implementation is in [Appendix A](#appendix-a-flutter-reference-implementation--media-watch--questions).
+
+#### 8.5.1 End-to-End User Journey & State Machine
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Earner (Flutter App)
+    participant Flutter as Flutter UI / Controller
+    participant API as Backend REST API (/api/v1)
+    participant DB as PostgreSQL & Redis
+    participant Wallet as Wallet Service
+
+    User->>Flutter: Taps Ad from Feed or Campaigns (/watch-ad/{id})
+    Flutter->>API: GET /api/v1/ads/{id}
+    API-->>Flutter: Return Ad metadata, durationSeconds, mediaUrl, & questions[]
+    
+    Flutter->>Flutter: Initialize Media (VideoPlayer / CachedNetworkImage)
+    Flutter->>Flutter: Start Countdown Timer (durationSeconds -> 0)
+    Note over Flutter,User: Controls disabled; Seek disabled; Timer pauses on backgrounding
+    
+    User->>Flutter: Watches media until timer reaches 0s
+    Flutter->>Flutter: Enable "Proceed to Questions" CTA
+    
+    User->>Flutter: Taps "Proceed to Questions"
+    Flutter->>API: POST /api/v1/mobile/ads/{id}/view { watchedDurationSeconds: N }
+    API->>DB: Mark AdView as COMPLETED (Prerequisite fulfilled, no reward yet)
+    API-->>Flutter: HTTP 200 { success: true }
+    
+    Flutter->>Flutter: Render Question 1 of N (Dynamic Radio Options)
+    loop For Each Question
+        User->>Flutter: Selects Option -> Taps "Next Question"
+        Flutter->>Flutter: Advance Stepper to next question
+    end
+    
+    User->>Flutter: Answers final question -> Taps "Submit"
+    Flutter->>Flutter: Show Fullscreen / Modal Loading Indicator
+    
+    alt Ad Type is QUIZ
+        Flutter->>API: POST /api/v1/quizzes/submit { adId, answers: [{ questionId, optionId }] }
+        API->>DB: Verify AdView is COMPLETED
+        API->>DB: Grade answers against correct options & passingScore
+        
+        alt Score >= Passing Score
+            API->>DB: Transition AdView to REWARDED
+            API->>Wallet: Create Pending/Approved Wallet Reward (+৳10.00)
+            API-->>Flutter: HTTP 200 { passed: true, score: N, pointsEarned: 10, rewardTriggered: true }
+            Flutter->>User: Display "Congratulation!" Success Modal -> Redirect to /campaigns
+        else Score < Passing Score
+            API-->>Flutter: HTTP 200 { passed: false, score: 0, rewardTriggered: false }
+            Flutter->>User: Display "Wrong Answer!" Modal -> Show retry options or exit
+        end
+        
+    else Ad Type is SURVEY
+        Flutter->>API: POST /api/v1/surveys/submit { adId, answers: [{ questionId, optionId, answerText }] }
+        API->>DB: Verify AdView is COMPLETED & persist feedback responses
+        API->>DB: Transition AdView to REWARDED
+        API->>Wallet: Create Wallet Reward (+৳10.00)
+        API-->>Flutter: HTTP 200 { passed: true, totalQuestions: N, rewardTriggered: true }
+        Flutter->>User: Display "Feedback Submitted!" Success Modal -> Redirect to /campaigns
+    end
+```
+
+#### 8.5.2 Anti-Fraud & Business Rules
+
+| Rule | Implementation Requirement | Server Reaction |
+|---|---|---|
+| **Anti-Skip Protection** | Disable video scrubbing / seeking controls until `durationSeconds` reaches 0. | Submitting before watch completion returns HTTP 400. |
+| **Prerequisite Gating** | Flutter app MUST execute `POST /api/v1/mobile/ads/{id}/view` before calling `/quizzes/submit` or `/surveys/submit`. | Backend checks `adView.completed == true`. Rejects premature submission with HTTP 400. |
+| **App Backgrounding** | Observe `AppLifecycleState`. If the app enters background, pause video and countdown timer. | Prevents earners from letting ads run unseen while using other applications. |
+| **Passing Score Gate** | Grade calculation is computed on the backend (`score >= passingScore`). | If below threshold, response returns `passed: false` and `rewardTriggered: false`. |
+| **Single Reward Guarantee** | A user can only complete and claim rewards once per active campaign session. | Duplicate completion attempts return HTTP 409 or mark status as ALREADY_CLAIMED. |
+
+#### 8.5.3 Edge Cases & Error Handling Checklist
+
+- [ ] **Network Loss during playback**: Store elapsed seconds locally. Allow resuming without restarting countdown from zero if under 5 minutes elapsed.
+- [ ] **Video Buffer / Stalling**: Countdown timer should pause if video playback state is `isBuffering == true`.
+- [ ] **Token Expiry (HTTP 401)**: The Dio Auth Interceptor should catch 401, trigger `/api/v1/auth/refresh`, and retry the pending submission payload transparently.
+- [ ] **Ad Creative 404 / Broken URL**: Display fallback branded placeholder image and gracefully permit the user to exit without crashing.
+- [ ] **Empty Questions Array**: If `questions.isEmpty` on a `QUIZ` ad, treat viewing completion as full reward trigger or inform user.
 
 ---
 
@@ -925,16 +1177,67 @@ Every JSON response adheres to this envelope:
 
 ---
 
-## 10. Quizzes & Daily Assessments
+## 10. Quizzes, Surveys & Interactive Assessments
 
-### 10.1 List & Details
-- **List Quizzes**: `GET /api/v1/mobile/quizzes`
-- **Quiz Details & Questions**: `GET /api/v1/mobile/quizzes/{id}`
+### 10.1 Standalone General Quizzes
+General knowledge, ICT, and e-commerce quizzes available directly on the mobile app feed.
+
+> [!IMPORTANT]
+> **UUID String Identification**: All IDs (`id`, `questionId`, `optionId`) in quizzes are standard UUID strings (e.g., `"c1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c"`). In Dart / TypeScript, declare them as `String` / `string`. Do NOT attempt to parse them into numeric integers.
+
+#### 10.1.1 List Active Quizzes
+- **Method**: `GET`
+- **URL**: `/api/v1/mobile/quizzes`
 - **Auth**: `Bearer <Token>`
+- **Response (`200 OK`)**:
+```json
+[
+  {
+    "id": "q1111111-2222-3333-4444-555555555555",
+    "title": "Digital Bangladesh & Smart ICT Knowledge",
+    "totalQuestions": 3,
+    "rewardAmount": 15.00
+  },
+  {
+    "id": "q2222222-3333-4444-5555-666666666666",
+    "title": "E-Commerce & Online Safety Essentials",
+    "totalQuestions": 3,
+    "rewardAmount": 12.00
+  }
+]
+```
 
----
+#### 10.1.2 Get Quiz Details & Questions
+- **Method**: `GET`
+- **URL**: `/api/v1/mobile/quizzes/{id}`
+- **Auth**: `Bearer <Token>`
+- **Response (`200 OK`)**:
+```json
+{
+  "id": "q1111111-2222-3333-4444-555555555555",
+  "title": "Digital Bangladesh & Smart ICT Knowledge",
+  "description": "Test your knowledge on ICT developments and earn rewards.",
+  "rewardAmount": 15.00,
+  "questions": [
+    {
+      "id": "qu-1111-aaaa-bbbb-cccc",
+      "questionText": "What does ICT stand for?",
+      "options": [
+        {
+          "id": "op-1111-xxxx-yyyy-zzzz",
+          "optionText": "Information and Communications Technology"
+        },
+        {
+          "id": "op-2222-xxxx-yyyy-zzzz",
+          "optionText": "Internal Computer Terminal"
+        }
+      ]
+    }
+  ]
+}
+```
 
-### 10.2 Submit Quiz & Auto-Grade
+#### 10.1.3 Submit Standalone Quiz Answers
 - **Method**: `POST`
 - **URL**: `/api/v1/mobile/quizzes/{id}/submit`
 - **Auth**: `Bearer <Token>`
@@ -943,8 +1246,8 @@ Every JSON response adheres to this envelope:
 {
   "answers": [
     {
-      "questionId": "qst-1111-2222-3333-444444444441",
-      "optionId": "opt-2"
+      "questionId": "qu-1111-aaaa-bbbb-cccc",
+      "optionId": "op-1111-xxxx-yyyy-zzzz"
     }
   ]
 }
@@ -952,10 +1255,128 @@ Every JSON response adheres to this envelope:
 - **Response (`200 OK`)**:
 ```json
 {
-  "score": 5,
-  "totalQuestions": 5,
   "passed": true,
-  "rewardAmount": 10.00
+  "score": 3,
+  "totalQuestions": 3,
+  "rewardAmount": 15.00,
+  "message": "Congratulations! You passed the quiz."
+}
+```
+
+---
+
+### 10.2 Campaign Interactive Video Ads Quiz
+Evaluates the user's answers against configured correct options for interactive video ads, auto-grades the submission, and triggers wallet reward if the user meets or exceeds `passingScore`.
+
+> [!IMPORTANT]
+> **Watch Prerequisite Required**: The user must complete the mandatory media viewing timer (`POST /api/v1/mobile/ads/{id}/view`) prior to calling `/quizzes/submit`. Attempting to submit without completed watch status triggers HTTP 400.
+> **Dual ID Acceptance**: The `adId` property in the request body can be either the **Ad ID (UUID)** or the **Campaign ID (UUID)**.
+
+- **Method**: `POST`
+- **URL**: `/api/v1/quizzes/submit`
+- **Auth**: `Bearer <Token>`
+- **Request Body**:
+```json
+{
+  "adId": "11111111-2222-3333-4444-555555555555",
+  "answers": [
+    {
+      "questionId": "q-uuid-1111-aaaa-bbbb",
+      "optionId": "opt-uuid-1111-xxxx"
+    },
+    {
+      "questionId": "q-uuid-2222-aaaa-bbbb",
+      "optionId": "opt-uuid-2222-xxxx"
+    }
+  ]
+}
+```
+
+- **Success Response — Passed (`200 OK`)**:
+```json
+{
+  "passed": true,
+  "score": 2,
+  "totalQuestions": 2,
+  "pointsEarned": 20,
+  "rewardTriggered": true
+}
+```
+
+- **Failure Response — Failed Passing Score (`200 OK`)**:
+```json
+{
+  "passed": false,
+  "score": 0,
+  "totalQuestions": 2,
+  "pointsEarned": 0,
+  "rewardTriggered": false
+}
+```
+
+- **Prerequisite Error — Watch Timer Incomplete (`400 Bad Request`)**:
+```json
+{
+  "success": false,
+  "errorCode": "INVALID_ARGUMENT",
+  "message": "You must complete watching the ad before submitting answers",
+  "data": null,
+  "timestamp": "2026-09-22T18:00:00"
+}
+```
+
+- **Duplicate Claim Error — Already Rewarded (`409 Conflict`)**:
+```json
+{
+  "success": false,
+  "errorCode": "ALREADY_CLAIMED",
+  "message": "You have already completed and claimed the reward for this ad",
+  "data": null,
+  "timestamp": "2026-09-25T18:00:00"
+}
+```
+
+---
+
+### 10.3 Submit Survey Responses
+Records user opinions/feedback for multi-vendor brand surveys and triggers the participation reward.
+
+> [!IMPORTANT]
+> **Watch Prerequisite Required**: The user must complete the media review period (`POST /api/v1/mobile/ads/{id}/view`) prior to submitting the survey.
+
+- **Method**: `POST`
+- **URL**: `/api/v1/surveys/submit`
+- **Auth**: `Bearer <Token>`
+- **Request Body**:
+```json
+{
+  "adId": "22222222-3333-4444-5555-666666666666",
+  "answers": [
+    {
+      "questionId": "q-survey-1",
+      "optionId": "opt-survey-1",
+      "answerText": "Very Likely"
+    }
+  ]
+}
+```
+
+- **Success Response (`200 OK`)**:
+```json
+{
+  "passed": true,
+  "totalQuestions": 1,
+  "rewardTriggered": true
+}
+```
+
+- **Prerequisite Error — Media Timer Incomplete (`400 Bad Request`)**:
+```json
+{
+  "success": false,
+  "message": "Ad view must be completed before taking the survey",
+  "data": null,
+  "timestamp": "2026-09-22T18:00:00"
 }
 ```
 
@@ -1160,13 +1581,15 @@ Every JSON response adheres to this envelope:
 | **Campaigns** | `GET` | `/api/v1/mobile/campaigns/{id}` | Bearer |
 | **Campaigns** | `POST` | `/api/v1/mobile/campaigns/{id}/start` | Bearer |
 | **Campaigns** | `POST` | `/api/v1/mobile/campaigns/{id}/complete` | Bearer |
+| **Ads** | `GET` | `/api/v1/ads/{id}` | Bearer |
 | **Ads** | `GET` | `/api/v1/mobile/ads/feed` | Bearer |
 | **Ads** | `POST` | `/api/v1/mobile/ads/{id}/view` | Bearer |
 | **Social Tasks** | `GET` | `/api/v1/mobile/social-tasks` | Bearer |
 | **Social Tasks** | `POST` | `/api/v1/mobile/social-tasks/{id}/submit` | Bearer |
 | **Quizzes** | `GET` | `/api/v1/mobile/quizzes` | Bearer |
 | **Quizzes** | `GET` | `/api/v1/mobile/quizzes/{id}` | Bearer |
-| **Quizzes** | `POST` | `/api/v1/mobile/quizzes/{id}/submit` | Bearer |
+| **Quizzes** | `POST` | `/api/v1/quizzes/submit` | Bearer |
+| **Surveys** | `POST` | `/api/v1/surveys/submit` | Bearer |
 | **Notifications** | `GET` | `/api/v1/mobile/notifications` | Bearer |
 | **Notifications** | `GET` | `/api/v1/mobile/notifications/unread-count` | Bearer |
 | **Notifications** | `PATCH` | `/api/v1/mobile/notifications/{id}/read` | Bearer |
@@ -1174,3 +1597,744 @@ Every JSON response adheres to this envelope:
 | **Notifications** | `POST` | `/api/v1/mobile/notifications/register-token` | Bearer |
 | **Geo** | `GET` | `/api/v1/geo/countries/by-code/{code}/mobile-operators` | Public |
 | **Storage** | `POST` | `/api/v1/files/upload` | Bearer (Multipart) |
+
+---
+
+## Appendix A: Flutter Reference Implementation — Media Watch & Questions
+
+Reference Dart code for the flow in §8.5, carried over from the former *Flutter Developer Integration Guide: Media Watch & Interactive Questions* (v1.0.0, 2026-09-22). It is a self-contained sample; file paths such as `lib/models/ad_models.dart` are suggestions, not requirements.
+
+### A.1 Data Models (Dart Classes)
+
+Save these models under `lib/models/ad_models.dart`.
+
+#### A.1.1 Video Ads Feed Item Model
+
+```dart
+class VideoAdFeedItemModel {
+  final String id;
+  final String title;
+  final String mediaUrl;
+  final int durationSeconds;
+  final double rewardAmount;
+  final bool viewed;
+  final String status;
+
+  VideoAdFeedItemModel({
+    required this.id,
+    required this.title,
+    required this.mediaUrl,
+    required this.durationSeconds,
+    required this.rewardAmount,
+    required this.viewed,
+    required this.status,
+  });
+
+  bool get isCompleted => viewed || status.toUpperCase() == 'COMPLETED';
+
+  factory VideoAdFeedItemModel.fromJson(Map<String, dynamic> json) {
+    return VideoAdFeedItemModel(
+      id: (json['id'] ?? json['adId']) as String? ?? '',
+      title: json['title'] as String? ?? 'Video Ad',
+      mediaUrl: (json['mediaUrl'] ?? json['videoUrl']) as String? ?? '',
+      durationSeconds: ((json['durationSeconds'] ?? json['duration']) as num?)?.toInt() ?? 30,
+      rewardAmount: ((json['rewardAmount'] ?? json['reward']) as num?)?.toDouble() ?? 10.0,
+      viewed: json['viewed'] as bool? ?? false,
+      status: json['status'] as String? ?? 'ACTIVE',
+    );
+  }
+}
+```
+
+#### A.1.2 Ad Metadata & Questions Model
+
+```dart
+enum AdType { VIDEO, IMAGE, GIF, QUIZ, SURVEY }
+
+class AdDetailModel {
+  final String id;
+  final String title;
+  final AdType adType;
+  final String? mediaUrl;
+  final int durationSeconds;
+  final double rewardAmount;
+  final int? passingScore;
+  final int? maxAttempts;
+  final List<QuestionModel> questions;
+
+  AdDetailModel({
+    required this.id,
+    required this.title,
+    required this.adType,
+    this.mediaUrl,
+    required this.durationSeconds,
+    required this.rewardAmount,
+    this.passingScore,
+    this.maxAttempts,
+    required this.questions,
+  });
+
+  bool get isVideo =>
+      mediaUrl != null &&
+      (mediaUrl!.endsWith('.mp4') ||
+          mediaUrl!.endsWith('.webm') ||
+          mediaUrl!.endsWith('.m3u8'));
+
+  factory AdDetailModel.fromJson(Map<String, dynamic> json) {
+    return AdDetailModel(
+      id: json['id'] as String,
+      title: json['title'] as String? ?? 'Advertisement',
+      adType: _parseAdType(json['adType'] as String?),
+      mediaUrl: json['mediaUrl'] as String?,
+      durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 10,
+      rewardAmount: (json['rewardAmount'] as num?)?.toDouble() ?? 10.0,
+      passingScore: (json['passingScore'] as num?)?.toInt(),
+      maxAttempts: (json['maxAttempts'] as num?)?.toInt(),
+      questions: (json['questions'] as List<dynamic>?)
+              ?.map((q) => QuestionModel.fromJson(q as Map<String, dynamic>))
+              .toList() ??
+          [],
+    );
+  }
+
+  static AdType _parseAdType(String? type) {
+    switch (type?.toUpperCase()) {
+      case 'QUIZ':
+        return AdType.QUIZ;
+      case 'SURVEY':
+        return AdType.SURVEY;
+      case 'IMAGE':
+        return AdType.IMAGE;
+      default:
+        return AdType.VIDEO;
+    }
+  }
+}
+
+class QuestionModel {
+  final String id;
+  final String questionText;
+  final String questionType;
+  final int orderIndex;
+  final List<OptionModel> options;
+
+  QuestionModel({
+    required this.id,
+    required this.questionText,
+    required this.questionType,
+    required this.orderIndex,
+    required this.options,
+  });
+
+  factory QuestionModel.fromJson(Map<String, dynamic> json) {
+    return QuestionModel(
+      id: json['id'] as String,
+      questionText: json['questionText'] as String? ?? '',
+      questionType: json['questionType'] as String? ?? 'SINGLE_CHOICE',
+      orderIndex: (json['orderIndex'] as num?)?.toInt() ?? 1,
+      options: (json['options'] as List<dynamic>?)
+              ?.map((o) => OptionModel.fromJson(o as Map<String, dynamic>))
+              .toList() ??
+          [],
+    );
+  }
+}
+
+class OptionModel {
+  final String id;
+  final String optionText;
+
+  OptionModel({
+    required this.id,
+    required this.optionText,
+  });
+
+  factory OptionModel.fromJson(Map<String, dynamic> json) {
+    return OptionModel(
+      id: json['id'] as String,
+      optionText: json['optionText'] as String? ?? '',
+    );
+  }
+}
+```
+
+---
+
+#### A.1.3 Quiz & Survey Submission Models
+
+```dart
+class QuizAnswerItem {
+  final String questionId;
+  final String optionId;
+  final String? answerText;
+
+  QuizAnswerItem({
+    required this.questionId,
+    required this.optionId,
+    this.answerText,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'questionId': questionId,
+      'optionId': optionId,
+      if (answerText != null) 'answerText': answerText,
+    };
+  }
+}
+
+class QuizSubmissionRequest {
+  final String adId;
+  final List<QuizAnswerItem> answers;
+
+  QuizSubmissionRequest({
+    required this.adId,
+    required this.answers,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'adId': adId,
+        'answers': answers.map((a) => a.toJson()).toList(),
+      };
+}
+
+class QuizSubmissionResult {
+  final bool passed;
+  final int score;
+  final int totalQuestions;
+  final int pointsEarned;
+  final bool rewardTriggered;
+
+  QuizSubmissionResult({
+    required this.passed,
+    required this.score,
+    required this.totalQuestions,
+    required this.pointsEarned,
+    required this.rewardTriggered,
+  });
+
+  factory QuizSubmissionResult.fromJson(Map<String, dynamic> json) {
+    return QuizSubmissionResult(
+      passed: json['passed'] as bool? ?? false,
+      score: (json['score'] as num?)?.toInt() ?? 0,
+      totalQuestions: (json['totalQuestions'] as num?)?.toInt() ?? 0,
+      pointsEarned: (json['pointsEarned'] as num?)?.toInt() ?? 0,
+      rewardTriggered: json['rewardTriggered'] as bool? ?? false,
+    );
+  }
+}
+```
+
+---
+
+### A.2 Flutter Service Implementation (Dio)
+
+Save under `lib/services/ad_api_service.dart`.
+
+#### A.2.1 API Client with Auth Interceptor
+
+```dart
+import 'package:dio/dio.dart';
+import '../models/ad_models.dart';
+
+class ApiService {
+  late final Dio _dio;
+
+  ApiService({required String baseUrl, required Future<String?> Function() tokenProvider}) {
+    _dio = Dio(BaseOptions(
+      baseUrl: baseUrl,
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
+      headers: {'Content-Type': 'application/json'},
+    ));
+
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) async {
+          final token = await tokenProvider();
+          if (token != null && token.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $token';
+          }
+          return handler.next(options);
+        },
+        onError: (DioException error, handler) {
+          // Centralized error normalization
+          return handler.next(error);
+        },
+      ),
+    );
+  }
+
+  Dio get client => _dio;
+}
+```
+
+---
+
+#### A.2.2 Ad & Assessment Service
+
+```dart
+class AdApiService {
+  final ApiService _api;
+
+  AdApiService(this._api);
+
+  /// 1. Fetch Ad metadata and dynamic questions
+  Future<AdDetailModel> getAdDetails(String adId) async {
+    final response = await _api.client.get('/ads/$adId');
+    if (response.data['success'] == true) {
+      return AdDetailModel.fromJson(response.data['data'] as Map<String, dynamic>);
+    }
+    throw Exception(response.data['message'] ?? 'Failed to load ad details');
+  }
+
+  /// 2. Track media watch completion (Prerequisite for submitting answers)
+  Future<bool> recordWatchCompletion(String adId, {required int watchedSeconds, required String deviceId}) async {
+    final response = await _api.client.post(
+      '/mobile/ads/$adId/view',
+      data: {
+        'watchedDurationSeconds': watchedSeconds,
+        'deviceId': deviceId,
+      },
+    );
+    return response.statusCode == 200;
+  }
+
+  /// 3. Submit quiz answers for grading & wallet reward
+  Future<QuizSubmissionResult> submitQuiz(QuizSubmissionRequest request) async {
+    final response = await _api.client.post(
+      '/quizzes/submit',
+      data: request.toJson(),
+    );
+    return QuizSubmissionResult.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// 4. Submit survey feedback
+  Future<bool> submitSurvey(QuizSubmissionRequest request) async {
+    final response = await _api.client.post(
+      '/surveys/submit',
+      data: request.toJson(),
+    );
+    return response.data['passed'] == true;
+  }
+}
+```
+
+---
+
+### A.3 UI & Controller Implementation Patterns
+
+#### A.3.1 Media Player with Non-Skippable Countdown
+
+Implement this inside `lib/screens/watch_ad_screen.dart`.
+
+```dart
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+import '../models/ad_models.dart';
+import '../services/ad_api_service.dart';
+
+class WatchAdScreen extends StatefulWidget {
+  final String adId;
+  final AdApiService adService;
+
+  const WatchAdScreen({Key? key, required this.adId, required this.adService}) : super(key: key);
+
+  @override
+  State<WatchAdScreen> createState() => _WatchAdScreenState();
+}
+
+class _WatchAdScreenState extends State<WatchAdScreen> with WidgetsBindingObserver {
+  AdDetailModel? _ad;
+  VideoPlayerController? _videoController;
+  Timer? _countdownTimer;
+
+  int _remainingSeconds = 0;
+  bool _canProceed = false;
+  bool _isLoading = true;
+  bool _isQuestionStage = false;
+
+  // Question navigation state
+  int _currentQuestionIndex = 0;
+  final Map<String, String> _selectedAnswers = {}; // questionId -> optionId
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadAd();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _countdownTimer?.cancel();
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Anti-fraud: pause video and timer when user leaves app
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _videoController?.pause();
+      _countdownTimer?.cancel();
+    } else if (state == AppLifecycleState.resumed && !_canProceed) {
+      if (_videoController != null && _videoController!.value.isInitialized) {
+        _videoController!.play();
+      }
+      _startTimer();
+    }
+  }
+
+  Future<void> _loadAd() async {
+    try {
+      final ad = await widget.adService.getAdDetails(widget.adId);
+      setState(() {
+        _ad = ad;
+        _remainingSeconds = ad.durationSeconds;
+        _isLoading = false;
+      });
+
+      if (ad.isVideo && ad.mediaUrl != null) {
+        _videoController = VideoPlayerController.networkUrl(Uri.parse(ad.mediaUrl!))
+          ..initialize().then((_) {
+            setState(() {});
+            _videoController!.play();
+          });
+      }
+      _startTimer();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading ad: $e')),
+      );
+    }
+  }
+
+  void _startTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingSeconds > 1) {
+        setState(() => _remainingSeconds--);
+      } else {
+        timer.cancel();
+        setState(() {
+          _remainingSeconds = 0;
+          _canProceed = true;
+        });
+      }
+    });
+  }
+
+  Future<void> _onProceedToQuestions() async {
+    setState(() => _isLoading = true);
+    try {
+      // 1. Mark ad view complete
+      await widget.adService.recordWatchCompletion(
+        widget.adId,
+        watchedSeconds: _ad!.durationSeconds,
+        deviceId: 'flutter-client-device',
+      );
+
+      setState(() {
+        _isLoading = false;
+        _isQuestionStage = true;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Verification error: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF121212),
+        body: Center(child: CircularProgressIndicator(color: Color(0xFFE5A93C))),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF121212),
+      appBar: AppBar(
+        title: Text(_isQuestionStage ? 'Assessment' : 'Watch Ad'),
+        backgroundColor: const Color(0xFF1E1E1E),
+      ),
+      body: _isQuestionStage ? _buildQuestionsView() : _buildMediaWatchView(),
+    );
+  }
+
+  Widget _buildMediaWatchView() {
+    return Column(
+      children: [
+        // Media Container
+        Expanded(
+          child: Center(
+            child: _ad!.isVideo && _videoController != null && _videoController!.value.isInitialized
+                ? AspectRatio(
+                    aspectRatio: _videoController!.value.aspectRatio,
+                    child: VideoPlayer(_videoController!),
+                  )
+                : Image.network(
+                    _ad!.mediaUrl ?? '',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, size: 80, color: Colors.grey),
+                  ),
+          ),
+        ),
+
+        // Countdown Bar
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: const BoxDecoration(
+            color: Color(0xFF1E1E1E),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Text(
+                _canProceed ? 'Media review completed!' : 'Reward unlocks in: ${_remainingSeconds}s',
+                style: TextStyle(
+                  color: _canProceed ? Colors.greenAccent : const Color(0xFFE5A93C),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: _canProceed ? _onProceedToQuestions : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFE5A93C),
+                    disabledBackgroundColor: Colors.grey.shade800,
+                  ),
+                  child: const Text('Proceed to Questions', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+```
+
+---
+
+#### A.3.2 Question Stepper & Selection Wizard
+
+Add this method to `_WatchAdScreenState`:
+
+```dart
+  Widget _buildQuestionsView() {
+    final questions = _ad!.questions;
+    final currentQ = questions[_currentQuestionIndex];
+    final selectedOptionId = _selectedAnswers[currentQ.id];
+    final isLastQuestion = _currentQuestionIndex == questions.length - 1;
+
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Progress indicator
+          Text(
+            'Question ${_currentQuestionIndex + 1} of ${questions.length}',
+            style: const TextStyle(color: Color(0xFFE5A93C), fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: (_currentQuestionIndex + 1) / questions.length,
+            backgroundColor: Colors.grey.shade800,
+            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE5A93C)),
+          ),
+          const SizedBox(height: 24),
+
+          // Question Title
+          Text(
+            currentQ.questionText,
+            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 20),
+
+          // Options List
+          Expanded(
+            child: ListView.separated(
+              itemCount: currentQ.options.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final opt = currentQ.options[index];
+                final isSelected = selectedOptionId == opt.id;
+
+                return InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedAnswers[currentQ.id] = opt.id;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: isSelected ? const Color(0x33E5A93C) : const Color(0xFF242424),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: isSelected ? const Color(0xFFE5A93C) : Colors.transparent,
+                        width: 2,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                          color: isSelected ? const Color(0xFFE5A93C) : Colors.grey,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            opt.optionText,
+                            style: const TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          // Action Button (Next or Submit)
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              onPressed: selectedOptionId != null ? _onNextOrSubmit : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFE5A93C),
+                disabledBackgroundColor: Colors.grey.shade800,
+              ),
+              child: Text(
+                isLastQuestion ? 'Submit Assessment' : 'Next Question',
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _onNextOrSubmit() async {
+    final questions = _ad!.questions;
+    if (_currentQuestionIndex < questions.length - 1) {
+      setState(() => _currentQuestionIndex++);
+    } else {
+      // Final submission
+      _submitAssessment();
+    }
+  }
+
+  Future<void> _submitAssessment() async {
+    setState(() => _isLoading = true);
+
+    final answers = _selectedAnswers.entries
+        .map((e) => QuizAnswerItem(questionId: e.key, optionId: e.value))
+        .toList();
+
+    final req = QuizSubmissionRequest(adId: widget.adId, answers: answers);
+
+    try {
+      if (_ad!.adType == AdType.QUIZ || (_ad!.questions.isNotEmpty && _ad!.adType != AdType.SURVEY)) {
+        final result = await widget.adService.submitQuiz(req);
+        setState(() => _isLoading = false);
+        if (result.passed) {
+          _showCongratulationModal(result.pointsEarned);
+        } else {
+          _showWrongAnswerModal();
+        }
+      } else {
+        await widget.adService.submitSurvey(req);
+        setState(() => _isLoading = false);
+        _showCongratulationModal(_ad!.rewardAmount.toInt());
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+```
+
+---
+
+#### A.3.3 Success & Failure Modal Dialogs
+
+```dart
+  void _showCongratulationModal(int points) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Congratulation! 🎉', style: TextStyle(color: Colors.greenAccent)),
+        content: Text(
+          'Your answers are correct!\n৳$points.00 has been added to your pending wallet.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE5A93C)),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop(); // Return to feed/campaigns
+            },
+            child: const Text('Continue', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showWrongAnswerModal() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Wrong Answer!', style: TextStyle(color: Colors.redAccent)),
+        content: const Text(
+          'Your answers did not meet the passing score for this campaign. You may re-attempt if attempts remain.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Exit', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE5A93C)),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              setState(() {
+                _currentQuestionIndex = 0;
+                _selectedAnswers.clear();
+              });
+            },
+            child: const Text('Try Again', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+  }
+```

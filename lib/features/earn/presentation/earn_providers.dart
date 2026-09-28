@@ -75,20 +75,28 @@ final dailyTasksProvider = FutureProvider.autoDispose<List<DailyTask>>(
 
 /// How many items a category currently offers — the landing tile badge and
 /// the "Remaining" stat.
-AsyncValue<int> watchKindCount(
-  WidgetRef ref,
-  EarnTaskKind kind,
-) => switch (kind) {
-  EarnTaskKind.ads => ref.watch(adsFeedProvider).whenData((ads) => ads.length),
-  EarnTaskKind.quizzes =>
-    ref.watch(quizzesProvider).whenData((quizzes) => quizzes.length),
-  EarnTaskKind.surveys =>
-    ref.watch(surveysProvider).whenData((surveys) => surveys.length),
-  EarnTaskKind.campaigns =>
-    ref
-        .watch(campaignsProvider)
-        .whenData((page) => math.max(page.totalElements, page.items.length)),
-};
+AsyncValue<int> watchKindCount(WidgetRef ref, EarnTaskKind kind) =>
+    switch (kind) {
+      // Claimed ads and campaigns stay in their feeds as history; only the
+      // open ones are pending.
+      EarnTaskKind.ads =>
+        ref
+            .watch(adsFeedProvider)
+            .whenData((ads) => ads.where((ad) => !ad.isCompleted).length),
+      EarnTaskKind.quizzes =>
+        ref.watch(quizzesProvider).whenData((quizzes) => quizzes.length),
+      EarnTaskKind.surveys =>
+        ref.watch(surveysProvider).whenData((surveys) => surveys.length),
+      EarnTaskKind.campaigns =>
+        ref
+            .watch(campaignsProvider)
+            .whenData(
+              (page) =>
+                  page.items.where((c) => !c.isCompleted).length +
+                  // Pages not loaded yet count as open.
+                  math.max(0, page.totalElements - page.items.length),
+            ),
+    };
 
 /// Refreshes every earning list and stat — call after a reward-producing
 /// action so the feeds drop what the user just completed and the totals move.

@@ -138,4 +138,71 @@ void main() {
       expect(result.pointsEarned, 20);
     });
   });
+  // Spec field names next to the deployed DTO names, 2026-09-28.
+  group('spec vs deployed field names', () {
+    test('a claimed feed item is completed, by either flag', () {
+      expect(
+        VideoAd.fromJson({'adId': 'a', 'viewed': true}).isCompleted,
+        isTrue,
+      );
+      expect(
+        VideoAd.fromJson({'adId': 'a', 'status': 'completed'}).isCompleted,
+        isTrue,
+      );
+      expect(
+        VideoAd.fromJson({'adId': 'a', 'viewed': false, 'status': 'ACTIVE'})
+            .isCompleted,
+        isFalse,
+      );
+    });
+
+    test('the claim survives merging with the ad details', () {
+      final card = VideoAd.fromJson({'adId': 'a', 'viewed': true});
+      final details = VideoAd.fromJson({'id': 'a', 'status': 'ACTIVE'});
+      expect(details.withFallback(card).viewed, isTrue);
+    });
+
+    test('a view that earned money is a reward, whatever its status', () {
+      expect(
+        AdView.fromJson({'status': 'COMPLETED', 'rewardEarned': 15}).isRewarded,
+        isTrue,
+      );
+      expect(
+        AdView.fromJson({'status': 'COMPLETED', 'rewardEligible': true})
+            .isRewarded,
+        isTrue,
+      );
+      expect(
+        AdView.fromJson({'status': 'COMPLETED', 'rewardEarned': 0}).isRewarded,
+        isFalse,
+      );
+    });
+
+    test('campaign completion', () {
+      expect(
+        CampaignCard.fromJson({'id': 'c', 'status': 'COMPLETED'}).isCompleted,
+        isTrue,
+      );
+      expect(
+        CampaignCard.fromJson({'id': 'c', 'status': 'ACTIVE'}).isCompleted,
+        isFalse,
+      );
+    });
+
+    test('quiz card and result read either name', () {
+      expect(
+        QuizCard.fromJson({'id': 'q', 'totalQuestions': 3}).questionCount,
+        3,
+      );
+      expect(
+        QuizCard.fromJson({'id': 'q', 'questionCount': 4}).questionCount,
+        4,
+      );
+      expect(
+        QuizResult.fromJson({'passed': true, 'rewardAmount': 15}).reward,
+        15,
+      );
+      expect(QuizResult.fromJson({'passed': true, 'reward': 12}).reward, 12);
+    });
+  });
 }

@@ -50,6 +50,7 @@ class VideoAd {
     this.questions = const [],
     this.passingScore,
     this.maxAttempts,
+    this.viewed = false,
   });
 
   final String adId;
@@ -64,8 +65,13 @@ class VideoAd {
   final num? reward;
   final AdType adType;
 
-  /// `AdResponse.status`; the feed card carries none.
+  /// On a feed card: `ACTIVE`, or `COMPLETED` once this user has claimed
+  /// the reward. From `GET /ads/{id}`: the ad's own lifecycle (`ACTIVE`,
+  /// `PAUSED`, …).
   final String? status;
+
+  /// The feed's per-user flag: this user already watched and was rewarded.
+  final bool viewed;
 
   /// Asked once the media ends (Figma V3 "Watch Ad" question step). Only
   /// `GET /ads/{id}` carries them — the feed card never does. The API uses
@@ -84,6 +90,11 @@ class VideoAd {
 
   /// Taken off sale by the advertiser or out of budget.
   bool get isActive => status == null || status == 'ACTIVE';
+
+  /// Already claimed by this user. Claimed ads stay in the feed so the list
+  /// can show them as done (API spec §8.3.1); starting one again would only
+  /// end in `ALREADY_CLAIMED`.
+  bool get isCompleted => viewed || status?.toUpperCase() == 'COMPLETED';
 
   static const _imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
@@ -110,6 +121,7 @@ class VideoAd {
           questions: questions,
           passingScore: passingScore,
           maxAttempts: maxAttempts,
+          viewed: viewed || card.viewed,
         );
 
   factory VideoAd.fromJson(Map<String, dynamic> json) => VideoAd(
@@ -124,6 +136,7 @@ class VideoAd {
     questions: _inOrder(json['questions']),
     passingScore: (json['passingScore'] as num?)?.toInt(),
     maxAttempts: (json['maxAttempts'] as num?)?.toInt(),
+    viewed: json['viewed'] as bool? ?? false,
   );
 
   /// Questions sorted by `orderIndex`; ties and missing indexes keep the
@@ -202,6 +215,7 @@ class AdView {
     this.adId,
     this.watchedDurationSeconds,
     this.completedAt,
+    this.rewardEarned,
   });
 
   final AdViewStatus status;
@@ -214,7 +228,17 @@ class AdView {
   final int? watchedDurationSeconds;
   final DateTime? completedAt;
 
-  bool get isRewarded => status == AdViewStatus.rewarded || rewardEligible;
+  /// What the view paid (API spec §8.3.2). Servers before 2026-09-28 sent
+  /// only [rewardEligible], which is still read as a fallback.
+  final num? rewardEarned;
+
+  /// For a plain ad, `COMPLETED` now means paid (spec §8.3.2), so the
+  /// status alone cannot say; the reward fields do. Ignored for ads with
+  /// questions — their reward comes from the answers.
+  bool get isRewarded =>
+      status == AdViewStatus.rewarded ||
+      rewardEligible ||
+      (rewardEarned ?? 0) > 0;
 
   factory AdView.fromJson(Map<String, dynamic> json) => AdView(
     status: AdViewStatus.parse(json['status'] as String?),
@@ -223,6 +247,7 @@ class AdView {
     adId: json['adId']?.toString(),
     watchedDurationSeconds: (json['watchedDurationSeconds'] as num?)?.toInt(),
     completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
+    rewardEarned: json['rewardEarned'] as num?,
   );
 }
 
@@ -244,7 +269,12 @@ class CampaignCard {
   final String? campaignType;
   final num? rewardAmount;
   final int? estimatedSeconds;
+
+  /// `ACTIVE`, or `COMPLETED` once this user has claimed it. Completed
+  /// campaigns stay in the list as history (API spec §8.1).
   final String? status;
+
+  bool get isCompleted => status?.toUpperCase() == 'COMPLETED';
 
   factory CampaignCard.fromJson(Map<String, dynamic> json) => CampaignCard(
     id: json['id']?.toString() ?? '',
@@ -327,7 +357,10 @@ class QuizCard {
   factory QuizCard.fromJson(Map<String, dynamic> json) => QuizCard(
     id: json['id']?.toString() ?? '',
     title: json['title'] as String? ?? '',
-    questionCount: (json['questionCount'] as num?)?.toInt(),
+    // `totalQuestions` per the spec (§10.1.1); the server still sends the
+    // older `questionCount` too.
+    questionCount: ((json['totalQuestions'] ?? json['questionCount']) as num?)
+        ?.toInt(),
     rewardAmount: json['rewardAmount'] as num?,
   );
 }
@@ -409,7 +442,9 @@ class QuizResult {
     score: (json['score'] as num?)?.toInt() ?? 0,
     totalQuestions: (json['totalQuestions'] as num?)?.toInt() ?? 0,
     passed: json['passed'] as bool? ?? false,
-    reward: json['reward'] as num?,
+    // `rewardAmount` per the spec (§10.1.3); the server still sends the
+    // older `reward` too.
+    reward: (json['rewardAmount'] ?? json['reward']) as num?,
   );
 }
 

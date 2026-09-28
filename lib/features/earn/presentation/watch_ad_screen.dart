@@ -23,7 +23,7 @@ import 'widgets/preparing_view.dart';
 
 /// Watch-an-ad flow (Figma V3 "Watch Ad": media → question → "Verifying" →
 /// "Congratulation!" / "Wrong Answer!"), per
-/// `docs/mobile-flutter-media-quiz-integration-guide.md`.
+/// `docs/mobile-api-specification.md` §8.5.
 ///
 /// The media cannot be skipped — the only controls are play/pause and mute.
 /// When it ends, `POST /mobile/ads/{id}/view` records the watch, and the
@@ -372,7 +372,11 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
         : details.hasError
         ? card
         : null;
-    final available = found != null && found.isActive;
+    // The feed marks what this user already claimed; playing it again could
+    // only end in `ALREADY_CLAIMED`. Only the feed knows — the ad details
+    // are not per user.
+    final claimed = card?.isCompleted ?? false;
+    final available = found != null && found.isActive && !claimed;
     if (available && !_adopting) {
       _adopting = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -386,7 +390,11 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     );
     final Widget body;
     var showAppBar = true;
-    if (available || !details.hasValue && !details.hasError) {
+    if (claimed) {
+      body = const ListStateMessage(
+        message: 'You have already claimed your reward for this ad.',
+      );
+    } else if (available || !details.hasValue && !details.hasError) {
       body = loading;
       showAppBar = false;
     } else if (found != null || details.hasValue || feed.hasValue) {
