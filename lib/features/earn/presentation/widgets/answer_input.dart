@@ -43,7 +43,9 @@ class AnswerInput extends StatelessWidget {
           ],
         );
 
-      case SurveyQuestionType.boolean:
+      // A yes/no question that carries its own options is a choice
+      // question: the server wants one of their ids.
+      case SurveyQuestionType.boolean when question.options.isEmpty:
         final selected = answer?.textAnswer;
         return Column(
           children: [
@@ -80,11 +82,13 @@ class AnswerInput extends StatelessWidget {
       case SurveyQuestionType.text:
         return AnswerTextField(
           initialValue: answer?.textAnswer,
+          maxLength: SurveyQuestion.maxTextLength,
           onChanged: (value) => onChanged(
             SurveyAnswer(questionId: question.id, textAnswer: value),
           ),
         );
 
+      case SurveyQuestionType.boolean:
       case SurveyQuestionType.singleChoice:
       case SurveyQuestionType.unknown:
         return Column(

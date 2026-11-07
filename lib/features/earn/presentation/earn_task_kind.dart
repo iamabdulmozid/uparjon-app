@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_assets.dart';
+import '../data/earn_models.dart';
 
 /// The earning categories (Figma "Uparjon": Ads / Quiz / Survey, plus the
 /// API's campaigns). Drives the landing tiles, the list screens and the
@@ -11,7 +12,7 @@ enum EarnTaskKind {
     slug: 'ads',
     title: 'Ads',
     noun: 'Ad',
-    subtitle: 'Watch video ad and earn money',
+    subtitle: 'Watch ads and earn money',
     icon: AppAssets.iconVideo,
     color: AppColors.blue,
     tint: AppColors.blueTint,
@@ -95,4 +96,11 @@ enum EarnTaskKind {
 
   static EarnTaskKind? fromSlug(String slug) =>
       values.where((kind) => kind.slug == slug).firstOrNull;
+
+  /// The category a campaign item belongs under.
+  static EarnTaskKind of(ContentKind kind) => switch (kind) {
+    ContentKind.ad => ads,
+    ContentKind.quiz => quizzes,
+    ContentKind.survey => surveys,
+  };
 }

@@ -37,7 +37,8 @@ void main() {
     });
 
     test('never leaks raw player text to the screen', () {
-      const raw = 'UnrecognizedInputFormatException: None of the available '
+      const raw =
+          'UnrecognizedInputFormatException: None of the available '
           'extractors could read the stream.';
 
       expect(VideoPlayerPlayback.describeError(raw), isNot(contains(raw)));

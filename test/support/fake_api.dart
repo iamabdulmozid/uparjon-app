@@ -22,7 +22,8 @@ FakeReply apiError(
 
 /// A page of items, shaped like Spring's `Page` — what the campaign,
 /// reward-history and wallet-transaction endpoints wrap their lists in.
-Map<String, dynamic> springPage(List<Map<String, dynamic>> items, {
+Map<String, dynamic> springPage(
+  List<Map<String, dynamic>> items, {
   int size = 20,
   int? totalElements,
 }) {
@@ -39,8 +40,8 @@ Map<String, dynamic> springPage(List<Map<String, dynamic>> items, {
   };
 }
 
-/// A response with no envelope at all — `GET /mobile/ads/feed` and the quiz
-/// and survey lists answer with a bare JSON array.
+/// A response with no envelope at all — the ad view and answer-submit
+/// replies come back like this.
 FakeReply rawJson(Object? body) => (status: 200, body: body);
 
 /// Dio transport that answers from a routing table instead of the network.

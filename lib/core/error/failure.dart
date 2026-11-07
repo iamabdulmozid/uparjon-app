@@ -72,12 +72,23 @@ sealed class Failure {
       ApiErrorCodes.kycRequired ||
       ApiErrorCodes.insufficientBalance ||
       ApiErrorCodes.duplicateRequest ||
-      ApiErrorCodes.businessError => BusinessFailure(
+      ApiErrorCodes.businessError ||
+      ApiErrorCodes.campaignNotStarted ||
+      ApiErrorCodes.campaignEnded ||
+      ApiErrorCodes.campaignInactive ||
+      ApiErrorCodes.campaignBudgetExhausted ||
+      ApiErrorCodes.participantTargetReached ||
+      ApiErrorCodes.productIneligible ||
+      ApiErrorCodes.notInTargetAudience => BusinessFailure(
         serverMessage ?? 'This action is not available right now.',
         code: code!,
       ),
       ApiErrorCodes.alreadyClaimed => BusinessFailure(
         _alreadyRewarded,
+        code: code!,
+      ),
+      ApiErrorCodes.duplicateParticipation => BusinessFailure(
+        'You have already completed this one.',
         code: code!,
       ),
       ApiErrorCodes.illegalState => _illegalState(error.message, code!),
@@ -117,6 +128,18 @@ sealed class Failure {
   static Failure _illegalState(String? serverText, String code) {
     final text = serverText ?? '';
 
+    // A view completed too soon stays started on the server (API changes
+    // 2026-10-11 §1.2), so the same completion succeeds once enough real
+    // time has passed. Matched on the text: the code is shared with rules
+    // that can never succeed.
+    if (text.contains('Insufficient watch duration')) {
+      return BusinessFailure(
+        'Please watch the whole video to earn this reward.',
+        code: code,
+        retryable: true,
+      );
+    }
+
     final message = switch (text) {
       _
           when text.contains('already been rewarded') ||
@@ -126,9 +149,7 @@ sealed class Failure {
         _alreadyRewarded,
       // "You must view the ad before submitting answers" — the guide
       // promises a 400 `INVALID_ARGUMENT`, staging sends this.
-      _
-          when text.contains('Insufficient watch duration') ||
-              text.contains('must view the ad') =>
+      _ when text.contains('must view the ad') =>
         'Please watch the whole video to earn this reward.',
       _ => 'This action is not available right now.',
     };
@@ -168,7 +189,14 @@ final class AccountRestrictedFailure extends Failure {
 /// A domain rule refused the action: not eligible, KYC needed, out of balance,
 /// already submitted. Callers branch on [code] to decide what to do next.
 final class BusinessFailure extends Failure {
-  const BusinessFailure(super.message, {required String super.code});
+  const BusinessFailure(
+    super.message, {
+    required String super.code,
+    this.retryable = false,
+  });
+
+  /// The rule clears with time — the same request can succeed later.
+  final bool retryable;
 }
 
 final class ValidationFailure extends Failure {

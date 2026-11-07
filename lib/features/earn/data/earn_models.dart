@@ -1,11 +1,13 @@
-/// Models for the earning content types: ads, quizzes, surveys and campaigns.
+/// Models for the earning content: campaign items (ads, quizzes, surveys),
+/// standalone quizzes and surveys, and campaigns.
 ///
 /// Field names mirror the `02 Mobile` OpenAPI DTOs, which is what the live
-/// API sends. `docs/mobile-api-specification.md` names a few fields
-/// differently (`thumbnailUrl`, `type`, `durationSeconds`); those are read as
-/// fallbacks so either shape parses. Money arrives as a number and is kept as
-/// [num] — the client never does arithmetic on it.
+/// API sends; where the docs name a field differently the other name is read
+/// as a fallback. Money arrives as a number and is kept as [num] — the client
+/// never does arithmetic on it.
 library;
+
+import '../../../core/utils/server_time.dart';
 
 /// `Paged` and `EarningsSummary` used to live here. They are re-exported so
 /// the earning screens keep a single import: the page envelope is shared
@@ -14,129 +16,194 @@ library;
 export '../../../core/network/paged.dart';
 export '../../wallet/data/wallet_models.dart' show EarningsSummary;
 
-/// What an ad asks of the viewer (`AdResponse.adType`).
-enum AdType {
-  video,
-  image,
+/// What a content item asks of the user (`MobileContentItemDto.kind`).
+enum ContentKind {
+  /// Media only, paid when the view completes.
+  ad,
 
-  /// Questions after the media, graded against `passingScore`.
+  /// Graded questions, paid on submit when the score passes.
   quiz,
 
-  /// Questions after the media, recorded as feedback and never graded.
-  survey,
-  other;
+  /// Ungraded questions, paid on submit.
+  survey;
 
-  static AdType parse(String? raw) => switch (raw?.toUpperCase()) {
-    'VIDEO' || null => video,
-    'IMAGE' || 'GIF' => image,
+  static ContentKind parse(String? raw) => switch (raw?.toUpperCase()) {
     'QUIZ' => quiz,
     'SURVEY' => survey,
-    _ => other,
+    _ => ad,
   };
 }
 
-/// A watchable ad: a feed card (`VideoAdDto`) or, with its questions, the
-/// full `AdResponse` from `GET /ads/{id}`.
-class VideoAd {
-  const VideoAd({
-    required this.adId,
+/// Which endpoints open and submit an item.
+enum ContentSource {
+  /// Part of a campaign: viewed with `/mobile/ads/{id}/view`, answered with
+  /// `/quizzes/submit` or `/surveys/submit`.
+  campaign,
+
+  /// A quiz or survey that belongs to no campaign: opened and submitted
+  /// through `/mobile/quizzes/{id}` or `/mobile/surveys/{id}`, with no media
+  /// and no view step.
+  standalone;
+
+  static ContentSource parse(String? raw) =>
+      raw?.toUpperCase() == 'STANDALONE' ? standalone : campaign;
+}
+
+/// The user's progress on one item.
+enum ContentProgress {
+  notStarted,
+
+  /// The view is counted but the answers were never sent — the item opens
+  /// straight on its questions.
+  answersPending,
+  completed;
+
+  static ContentProgress parse(String? raw) => switch (raw?.toUpperCase()) {
+    'ANSWERS_PENDING' => answersPending,
+    'COMPLETED' => completed,
+    _ => notStarted,
+  };
+}
+
+enum MediaType {
+  image,
+  gif,
+  video;
+
+  static MediaType? parse(String? raw) => switch (raw?.toUpperCase()) {
+    'IMAGE' => image,
+    'GIF' => gif,
+    'VIDEO' => video,
+    _ => null,
+  };
+}
+
+const _imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+
+/// A still or animated image rather than a video, by declared type or, when
+/// the type is missing, by the file extension.
+bool isImageMedia(MediaType? type, String? url) {
+  if (type == MediaType.image || type == MediaType.gif) return true;
+  if (type == MediaType.video) return false;
+  final path = Uri.tryParse(url ?? '')?.path.toLowerCase() ?? '';
+  return _imageExtensions.any(path.endsWith);
+}
+
+/// One ad, quiz or survey (`MobileContentItemDto`) — the card in the Ads,
+/// Quiz and Survey lists and on the campaign screen. Its [id] is the same on
+/// every screen; for a campaign item it is the ad id the view and submit
+/// endpoints take.
+class ContentItem {
+  const ContentItem({
+    required this.id,
+    required this.kind,
+    required this.source,
     required this.title,
-    this.videoUrl,
+    this.description,
+    this.mediaType,
+    this.mediaUrl,
     this.thumbnailUrl,
-    this.duration,
+    this.durationSeconds,
     this.reward,
-    this.adType = AdType.video,
-    this.status,
-    this.questions = const [],
+    this.paysPerQuestion = false,
+    this.questionCount = 0,
     this.passingScore,
-    this.maxAttempts,
-    this.viewed = false,
+    this.progress = ContentProgress.notStarted,
+    this.available = true,
+    this.unavailableCode,
+    this.unavailableMessage,
+    this.campaignId,
+    this.campaignTitle,
+    this.campaignBannerUrl,
+    this.campaignEndAt,
   });
 
-  final String adId;
+  final String id;
+  final ContentKind kind;
+  final ContentSource source;
   final String title;
+  final String? description;
+  final MediaType? mediaType;
+  final String? mediaUrl;
 
-  /// The creative — a video, or an image/GIF shown for [duration].
-  final String? videoUrl;
+  /// Falls back to the campaign banner on the server already.
   final String? thumbnailUrl;
 
-  /// Required watch time in seconds.
-  final int? duration;
+  /// Media length. The view only counts after 80% of it.
+  final int? durationSeconds;
+
+  /// BDT. When [paysPerQuestion] is true this is the most one user can earn.
   final num? reward;
-  final AdType adType;
+  final bool paysPerQuestion;
+  final int questionCount;
 
-  /// On a feed card: `ACTIVE`, or `COMPLETED` once this user has claimed
-  /// the reward. From `GET /ads/{id}`: the ad's own lifecycle (`ACTIVE`,
-  /// `PAUSED`, …).
-  final String? status;
-
-  /// The feed's per-user flag: this user already watched and was rewarded.
-  final bool viewed;
-
-  /// Asked once the media ends (Figma V3 "Watch Ad" question step). Only
-  /// `GET /ads/{id}` carries them — the feed card never does. The API uses
-  /// the survey `QuestionDto` for ad questions too, so the survey model and
-  /// its answer widgets serve both.
-  final List<SurveyQuestion> questions;
+  /// Quiz only: the % of correct answers needed to be paid; null means 100.
   final int? passingScore;
+  final ContentProgress progress;
 
-  /// How many graded submissions the server accepts; null means one.
-  final int? maxAttempts;
+  /// The user can do it now. When false, [unavailableMessage] says why and
+  /// is safe to show.
+  final bool available;
+  final String? unavailableCode;
+  final String? unavailableMessage;
 
-  bool get hasQuestions => questions.isNotEmpty;
+  /// Null for a standalone item.
+  final String? campaignId;
+  final String? campaignTitle;
+  final String? campaignBannerUrl;
 
-  /// Answers go to `/surveys/submit` (ungraded) rather than `/quizzes/submit`.
-  bool get isSurvey => adType == AdType.survey;
+  /// Null means the campaign has no end date.
+  final DateTime? campaignEndAt;
 
-  /// Taken off sale by the advertiser or out of budget.
-  bool get isActive => status == null || status == 'ACTIVE';
+  bool get isCompleted => progress == ContentProgress.completed;
+  bool get isStandalone => source == ContentSource.standalone;
+  bool get isSurvey => kind == ContentKind.survey;
+  bool get hasQuestions => kind != ContentKind.ad;
+  bool get isImage => isImageMedia(mediaType, mediaUrl);
 
-  /// Already claimed by this user. Claimed ads stay in the feed so the list
-  /// can show them as done (API spec §8.3.1); starting one again would only
-  /// end in `ALREADY_CLAIMED`.
-  bool get isCompleted => viewed || status?.toUpperCase() == 'COMPLETED';
+  /// Worth offering a Start button: not done, and either open to the user or
+  /// already viewed and waiting on its answers.
+  bool get canStart =>
+      !isCompleted && (available || progress == ContentProgress.answersPending);
 
-  static const _imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-
-  /// A still or animated image rather than a video.
-  bool get isImage {
-    if (adType == AdType.image) return true;
-    final path = Uri.tryParse(videoUrl ?? '')?.path.toLowerCase() ?? '';
-    return _imageExtensions.any(path.endsWith);
-  }
-
-  /// This ad's details with anything they lack taken from [card] — the feed
-  /// entry the user tapped.
-  VideoAd withFallback(VideoAd? card) => card == null
-      ? this
-      : VideoAd(
-          adId: adId,
-          title: title.isEmpty ? card.title : title,
-          videoUrl: videoUrl ?? card.videoUrl,
-          thumbnailUrl: thumbnailUrl ?? card.thumbnailUrl,
-          duration: duration ?? card.duration,
-          reward: reward ?? card.reward,
-          adType: adType,
-          status: status,
-          questions: questions,
-          passingScore: passingScore,
-          maxAttempts: maxAttempts,
-          viewed: viewed || card.viewed,
-        );
-
-  factory VideoAd.fromJson(Map<String, dynamic> json) => VideoAd(
-    adId: (json['adId'] ?? json['id'])?.toString() ?? '',
+  factory ContentItem.fromJson(Map<String, dynamic> json) => ContentItem(
+    id: json['id']?.toString() ?? '',
+    kind: ContentKind.parse(json['kind'] as String?),
+    source: ContentSource.parse(json['source'] as String?),
     title: json['title'] as String? ?? '',
-    videoUrl: (json['videoUrl'] ?? json['mediaUrl']) as String?,
-    thumbnailUrl: (json['thumbnailUrl'] ?? json['thumbnail']) as String?,
-    duration: ((json['duration'] ?? json['durationSeconds']) as num?)?.toInt(),
-    reward: (json['reward'] ?? json['rewardAmount']) as num?,
-    adType: AdType.parse(json['adType'] as String?),
-    status: json['status'] as String?,
-    questions: _inOrder(json['questions']),
+    description: json['description'] as String?,
+    mediaType: MediaType.parse(json['mediaType'] as String?),
+    mediaUrl: json['mediaUrl'] as String?,
+    thumbnailUrl: json['thumbnailUrl'] as String?,
+    durationSeconds: (json['durationSeconds'] as num?)?.toInt(),
+    reward: json['reward'] as num?,
+    paysPerQuestion: json['paysPerQuestion'] as bool? ?? false,
+    questionCount: (json['questionCount'] as num?)?.toInt() ?? 0,
     passingScore: (json['passingScore'] as num?)?.toInt(),
-    maxAttempts: (json['maxAttempts'] as num?)?.toInt(),
-    viewed: json['viewed'] as bool? ?? false,
+    progress: ContentProgress.parse(json['progress'] as String?),
+    available: json['available'] as bool? ?? true,
+    unavailableCode: json['unavailableCode'] as String?,
+    unavailableMessage: json['unavailableMessage'] as String?,
+    campaignId: json['campaignId']?.toString(),
+    campaignTitle: json['campaignTitle'] as String?,
+    campaignBannerUrl: json['campaignBannerUrl'] as String?,
+    campaignEndAt: ServerTime.parse(json['campaignEndAt']),
+  );
+}
+
+/// An item with its questions (`MobileContentDetailDto`,
+/// `GET /mobile/content/{id}`). The correct answers are never sent.
+class ContentDetail {
+  const ContentDetail({required this.item, this.questions = const []});
+
+  final ContentItem item;
+  final List<SurveyQuestion> questions;
+
+  factory ContentDetail.fromJson(Map<String, dynamic> json) => ContentDetail(
+    item: ContentItem.fromJson(
+      (json['item'] as Map? ?? const {}).cast<String, dynamic>(),
+    ),
+    questions: _inOrder(json['questions']),
   );
 
   /// Questions sorted by `orderIndex`; ties and missing indexes keep the
@@ -155,41 +222,155 @@ class VideoAd {
   }
 }
 
-/// Outcome of answering an ad's questions (`POST /quizzes/submit` or
-/// `/surveys/submit`, both untyped maps in the OpenAPI).
+/// A campaign with all of its items and the user's progress on them
+/// (`MobileCampaignContentResponse`, `GET /mobile/campaigns/{id}/items`).
+class CampaignContent {
+  const CampaignContent({
+    required this.id,
+    required this.title,
+    this.description,
+    this.bannerUrl,
+    this.campaignTypeLabel,
+    this.contentTypeLabel,
+    this.startAt,
+    this.endAt,
+    this.totalItems = 0,
+    this.completedItems = 0,
+    this.ads = const [],
+    this.quizzes = const [],
+    this.surveys = const [],
+  });
+
+  final String id;
+  final String title;
+  final String? description;
+  final String? bannerUrl;
+  final String? campaignTypeLabel;
+  final String? contentTypeLabel;
+  final DateTime? startAt;
+
+  /// Null means no end date.
+  final DateTime? endAt;
+  final int totalItems;
+  final int completedItems;
+  final List<ContentItem> ads;
+  final List<ContentItem> quizzes;
+  final List<ContentItem> surveys;
+
+  bool get isEmpty => ads.isEmpty && quizzes.isEmpty && surveys.isEmpty;
+
+  factory CampaignContent.fromJson(Map<String, dynamic> json) {
+    List<ContentItem> items(String key) => [
+      for (final item in json[key] as List? ?? const [])
+        if (item is Map) ContentItem.fromJson(item.cast<String, dynamic>()),
+    ];
+    final ads = items('ads');
+    final quizzes = items('quizzes');
+    final surveys = items('surveys');
+    return CampaignContent(
+      id: json['id']?.toString() ?? '',
+      title: json['title'] as String? ?? '',
+      description: json['description'] as String?,
+      bannerUrl: json['bannerUrl'] as String?,
+      campaignTypeLabel: json['campaignTypeLabel'] as String?,
+      contentTypeLabel: json['contentTypeLabel'] as String?,
+      startAt: ServerTime.parse(json['startAt']),
+      endAt: ServerTime.parse(json['endAt']),
+      totalItems:
+          (json['totalItems'] as num?)?.toInt() ??
+          ads.length + quizzes.length + surveys.length,
+      completedItems: (json['completedItems'] as num?)?.toInt() ?? 0,
+      ads: ads,
+      quizzes: quizzes,
+      surveys: surveys,
+    );
+  }
+}
+
+/// Cashback reserved by an answer, paid once the user buys the product
+/// (`cashback[]` on the submit reply).
+class CashbackPromise {
+  const CashbackPromise({
+    required this.amount,
+    this.cashbackId,
+    this.questionId,
+    this.status,
+    this.purchaseDeadline,
+  });
+
+  final num amount;
+  final String? cashbackId;
+  final String? questionId;
+
+  /// `AWAITING_PURCHASE` right after the answer.
+  final String? status;
+  final DateTime? purchaseDeadline;
+
+  factory CashbackPromise.fromJson(Map<String, dynamic> json) =>
+      CashbackPromise(
+        amount: json['amount'] as num? ?? 0,
+        cashbackId: json['cashbackId']?.toString(),
+        questionId: json['questionId']?.toString(),
+        status: json['status'] as String?,
+        purchaseDeadline: ServerTime.parse(json['purchaseDeadline']),
+      );
+}
+
+/// Outcome of answering a campaign item (`POST /quizzes/submit` or
+/// `/surveys/submit`, both un-enveloped and untyped in the OpenAPI).
+///
+/// There is one submission per item: a failed quiz is still done, with no
+/// reward, and cannot be retried.
 class AdAssessment {
   const AdAssessment({
     required this.passed,
-    required this.rewardTriggered,
     this.score,
     this.totalQuestions,
-    this.pointsEarned,
+    this.rewardEarned,
+    this.cashbackPromised,
+    this.cashback = const [],
+    this.participationReference,
   });
 
   final bool passed;
-  final bool rewardTriggered;
   final int? score;
   final int? totalQuestions;
-  final num? pointsEarned;
+
+  /// Paid to the wallet now. A per-question item can pay something even when
+  /// [passed] is false.
+  final num? rewardEarned;
+
+  /// Promised for buying a product later — not paid yet, so never "earned".
+  final num? cashbackPromised;
+  final List<CashbackPromise> cashback;
+  final String? participationReference;
+
+  bool get earned => (rewardEarned ?? 0) > 0;
+  bool get hasCashback => (cashbackPromised ?? 0) > 0;
 
   /// [passedByDefault] covers a survey reply without a `passed` flag: a
   /// survey is not graded, so an accepted submission is a pass.
   factory AdAssessment.fromJson(
     Map<String, dynamic> json, {
     bool passedByDefault = false,
-  }) {
-    final passed = json['passed'] as bool? ?? passedByDefault;
-    return AdAssessment(
-      passed: passed,
-      rewardTriggered: json['rewardTriggered'] as bool? ?? passed,
-      score: (json['score'] as num?)?.toInt(),
-      totalQuestions: (json['totalQuestions'] as num?)?.toInt(),
-      pointsEarned: json['pointsEarned'] as num?,
-    );
-  }
+  }) => AdAssessment(
+    passed: json['passed'] as bool? ?? passedByDefault,
+    score: (json['score'] as num?)?.toInt(),
+    totalQuestions: (json['totalQuestions'] as num?)?.toInt(),
+    // Older replies named the payout `rewardAmount`. `pointsEarned` is a
+    // points figure that never matched the wallet credit, so it is not read.
+    rewardEarned: (json['rewardEarned'] ?? json['rewardAmount']) as num?,
+    cashbackPromised: json['cashbackPromised'] as num?,
+    cashback: [
+      for (final entry in json['cashback'] as List? ?? const [])
+        if (entry is Map)
+          CashbackPromise.fromJson(entry.cast<String, dynamic>()),
+    ],
+    participationReference: json['participationReference'] as String?,
+  );
 }
 
-/// Lifecycle of a recorded ad view (`AdViewResponse.status`).
+/// Lifecycle of a recorded view (`AdViewResponse.status`).
 enum AdViewStatus {
   started,
   completed,
@@ -206,162 +387,99 @@ enum AdViewStatus {
   };
 }
 
-/// Result of submitting an ad view (`AdViewResponse`).
+/// A view of a campaign item (`AdViewResponse`, un-enveloped).
+///
+/// `POST /mobile/ads/{id}/view` is called twice: once when the media starts,
+/// which answers [AdViewStatus.started] and pays nothing, and again when it
+/// ends. The second call pays a plain ad ([AdViewStatus.rewarded]) or, for an
+/// item with questions, completes the view with [awaitingAnswers] set.
 class AdView {
   const AdView({
     required this.status,
-    required this.rewardEligible,
     this.id,
     this.adId,
     this.watchedDurationSeconds,
+    this.startedAt,
     this.completedAt,
     this.rewardEarned,
+    this.awaitingAnswers = false,
   });
 
   final AdViewStatus status;
-
-  /// The server accepted the watch as reward-worthy. Payment may still wait
-  /// on fraud validation, so this is "earned", not "credited".
-  final bool rewardEligible;
   final String? id;
   final String? adId;
   final int? watchedDurationSeconds;
+  final DateTime? startedAt;
   final DateTime? completedAt;
-
-  /// What the view paid (API spec §8.3.2). Servers before 2026-09-28 sent
-  /// only [rewardEligible], which is still read as a fallback.
   final num? rewardEarned;
 
-  /// For a plain ad, `COMPLETED` now means paid (spec §8.3.2), so the
-  /// status alone cannot say; the reward fields do. Ignored for ads with
-  /// questions — their reward comes from the answers.
+  /// The view counted; the reward now comes from submitting the answers.
+  final bool awaitingAnswers;
+
+  bool get isStarted => status == AdViewStatus.started;
+
+  /// `rewardEligible` is deliberately not read: the server sets it on views
+  /// that pay nothing, such as a quiz's.
   bool get isRewarded =>
-      status == AdViewStatus.rewarded ||
-      rewardEligible ||
-      (rewardEarned ?? 0) > 0;
+      status == AdViewStatus.rewarded || (rewardEarned ?? 0) > 0;
 
   factory AdView.fromJson(Map<String, dynamic> json) => AdView(
     status: AdViewStatus.parse(json['status'] as String?),
-    rewardEligible: json['rewardEligible'] as bool? ?? false,
     id: json['id']?.toString(),
     adId: json['adId']?.toString(),
     watchedDurationSeconds: (json['watchedDurationSeconds'] as num?)?.toInt(),
-    completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
+    startedAt: ServerTime.parse(json['startedAt']),
+    completedAt: ServerTime.parse(json['completedAt']),
     rewardEarned: json['rewardEarned'] as num?,
+    awaitingAnswers: json['awaitingAnswers'] as bool? ?? false,
   );
 }
 
-/// Campaign list card (`CampaignCardDto`).
+/// Campaign list card (`CampaignCardDto`). Tapping one opens the campaign
+/// screen, which lists its items.
 class CampaignCard {
   const CampaignCard({
     required this.id,
     required this.title,
     this.thumbnail,
-    this.campaignType,
+    this.contentTypeLabel,
     this.rewardAmount,
     this.estimatedSeconds,
     this.status,
+    this.endAt,
   });
 
   final String id;
   final String title;
   final String? thumbnail;
-  final String? campaignType;
+
+  /// "Quiz", "Video", "Survey" … (`contentTypeLabel`).
+  final String? contentTypeLabel;
   final num? rewardAmount;
   final int? estimatedSeconds;
 
-  /// `ACTIVE`, or `COMPLETED` once this user has claimed it. Completed
-  /// campaigns stay in the list as history (API spec §8.1).
+  /// `ACTIVE`, or `COMPLETED` once this user has finished it. Completed
+  /// campaigns stay in the list as history.
   final String? status;
+
+  /// Null means no end date.
+  final DateTime? endAt;
 
   bool get isCompleted => status?.toUpperCase() == 'COMPLETED';
 
   factory CampaignCard.fromJson(Map<String, dynamic> json) => CampaignCard(
     id: json['id']?.toString() ?? '',
     title: json['title'] as String? ?? '',
-    thumbnail: (json['thumbnail'] ?? json['thumbnailUrl']) as String?,
-    campaignType: (json['campaignType'] ?? json['type']) as String?,
+    thumbnail:
+        (json['thumbnailUrl'] ?? json['thumbnail'] ?? json['bannerUrl'])
+            as String?,
+    contentTypeLabel: json['contentTypeLabel'] as String?,
     rewardAmount: json['rewardAmount'] as num?,
     estimatedSeconds:
         ((json['estimatedSeconds'] ?? json['durationSeconds']) as num?)
             ?.toInt(),
     status: json['status'] as String?,
-  );
-}
-
-/// Campaign details (`CampaignDetailsResponse`).
-class CampaignDetails {
-  const CampaignDetails({
-    required this.id,
-    required this.title,
-    required this.eligible,
-    this.description,
-    this.image,
-    this.instructions,
-    this.rewardAmount,
-    this.estimatedDuration,
-  });
-
-  final String id;
-  final String title;
-  final bool eligible;
-  final String? description;
-  final String? image;
-  final String? instructions;
-  final num? rewardAmount;
-  final int? estimatedDuration;
-
-  factory CampaignDetails.fromJson(Map<String, dynamic> json) =>
-      CampaignDetails(
-        id: json['id']?.toString() ?? '',
-        title: json['title'] as String? ?? '',
-        eligible: json['eligible'] as bool? ?? true,
-        description: json['description'] as String?,
-        image: (json['image'] ?? json['thumbnailUrl']) as String?,
-        instructions: json['instructions'] as String?,
-        rewardAmount: json['rewardAmount'] as num?,
-        estimatedDuration:
-            ((json['estimatedDuration'] ?? json['durationSeconds']) as num?)
-                ?.toInt(),
-      );
-}
-
-/// A started campaign run (`CampaignSessionResponse`).
-class CampaignSession {
-  const CampaignSession({required this.sessionId, this.startedAt});
-
-  final String sessionId;
-  final DateTime? startedAt;
-
-  factory CampaignSession.fromJson(Map<String, dynamic> json) =>
-      CampaignSession(
-        sessionId: json['sessionId']?.toString() ?? '',
-        startedAt: DateTime.tryParse(json['startedAt'] as String? ?? ''),
-      );
-}
-
-/// Quiz list card (`QuizCardDto`).
-class QuizCard {
-  const QuizCard({
-    required this.id,
-    required this.title,
-    this.questionCount,
-    this.rewardAmount,
-  });
-
-  final String id;
-  final String title;
-  final int? questionCount;
-  final num? rewardAmount;
-
-  factory QuizCard.fromJson(Map<String, dynamic> json) => QuizCard(
-    id: json['id']?.toString() ?? '',
-    title: json['title'] as String? ?? '',
-    // `totalQuestions` per the spec (§10.1.1); the server still sends the
-    // older `questionCount` too.
-    questionCount: ((json['totalQuestions'] ?? json['questionCount']) as num?)
-        ?.toInt(),
-    rewardAmount: json['rewardAmount'] as num?,
+    endAt: ServerTime.parse(json['endAt']),
   );
 }
 
@@ -397,7 +515,7 @@ class QuizQuestion {
   );
 }
 
-/// Quiz details (`QuizDetailsResponse`).
+/// Standalone quiz details (`QuizDetailsResponse`).
 class QuizDetails {
   const QuizDetails({
     required this.id,
@@ -424,7 +542,7 @@ class QuizDetails {
   );
 }
 
-/// Quiz outcome (`QuizResultResponse`).
+/// Standalone quiz outcome (`QuizResultResponse`).
 class QuizResult {
   const QuizResult({
     required this.score,
@@ -445,31 +563,6 @@ class QuizResult {
     // `rewardAmount` per the spec (§10.1.3); the server still sends the
     // older `reward` too.
     reward: (json['rewardAmount'] ?? json['reward']) as num?,
-  );
-}
-
-/// Survey list card (`SurveyCardDto`).
-class SurveyCard {
-  const SurveyCard({
-    required this.id,
-    required this.title,
-    this.questionCount,
-    this.rewardAmount,
-    this.estimatedSeconds,
-  });
-
-  final String id;
-  final String title;
-  final int? questionCount;
-  final num? rewardAmount;
-  final int? estimatedSeconds;
-
-  factory SurveyCard.fromJson(Map<String, dynamic> json) => SurveyCard(
-    id: json['id']?.toString() ?? '',
-    title: json['title'] as String? ?? '',
-    questionCount: (json['questionCount'] as num?)?.toInt(),
-    rewardAmount: json['rewardAmount'] as num?,
-    estimatedSeconds: (json['estimatedSeconds'] as num?)?.toInt(),
   );
 }
 
@@ -503,6 +596,8 @@ class SurveyOption {
   );
 }
 
+/// A question — a standalone survey's (`MobileSurveyQuestionDto`) or a
+/// campaign item's (`QuestionDto`), which adds rewards, media and cashback.
 class SurveyQuestion {
   const SurveyQuestion({
     required this.id,
@@ -513,7 +608,16 @@ class SurveyQuestion {
     this.minVal,
     this.maxVal,
     this.orderIndex,
+    this.rewardAmount,
+    this.isCashback = false,
+    this.productUrl,
+    this.purchaseWindowDays,
+    this.mediaType,
+    this.mediaUrl,
   });
+
+  /// The server's limit on a `TEXT` answer.
+  static const int maxTextLength = 2000;
 
   final String id;
   final String text;
@@ -521,18 +625,35 @@ class SurveyQuestion {
   final bool isRequired;
   final List<SurveyOption> options;
 
-  /// Bounds for a RATING question.
+  /// Bounds for a RATING question; the server defaults them to 1–5.
   final int? minVal;
   final int? maxVal;
 
-  /// Position within an ad's questions (`QuestionDto.orderIndex`).
+  /// Position within an item's questions (`QuestionDto.orderIndex`).
   final int? orderIndex;
+
+  /// BDT this question pays — now, or as cashback when [isCashback].
+  final num? rewardAmount;
+
+  /// `rewardMode: PURCHASE_CASHBACK`: answering reserves cashback that is
+  /// paid only after the user buys [productUrl] from the platform store
+  /// within [purchaseWindowDays].
+  final bool isCashback;
+  final String? productUrl;
+  final int? purchaseWindowDays;
+
+  /// Media shown with the question itself.
+  final MediaType? mediaType;
+  final String? mediaUrl;
+
+  bool get hasImage =>
+      (mediaUrl?.isNotEmpty ?? false) && isImageMedia(mediaType, mediaUrl);
 
   factory SurveyQuestion.fromJson(Map<String, dynamic> json) => SurveyQuestion(
     id: json['id']?.toString() ?? '',
     text: json['questionText'] as String? ?? '',
     type: SurveyQuestionType.parse(json['questionType'] as String?),
-    // Surveys send `required`; the ad `QuestionDto` names it `isRequired`.
+    // Surveys send `required`; the item `QuestionDto` names it `isRequired`.
     isRequired: (json['required'] ?? json['isRequired']) as bool? ?? false,
     orderIndex: (json['orderIndex'] as num?)?.toInt(),
     minVal: (json['minVal'] as num?)?.toInt(),
@@ -540,10 +661,16 @@ class SurveyQuestion {
     options: (json['options'] as List? ?? [])
         .map((e) => SurveyOption.fromJson((e as Map).cast<String, dynamic>()))
         .toList(),
+    rewardAmount: json['rewardAmount'] as num?,
+    isCashback: json['rewardMode'] == 'PURCHASE_CASHBACK',
+    productUrl: json['productUrl'] as String?,
+    purchaseWindowDays: (json['purchaseWindowDays'] as num?)?.toInt(),
+    mediaType: MediaType.parse(json['mediaType'] as String?),
+    mediaUrl: json['mediaUrl'] as String?,
   );
 }
 
-/// Survey details (`MobileSurveyDetailsResponse`).
+/// Standalone survey details (`MobileSurveyDetailsResponse`).
 class SurveyDetails {
   const SurveyDetails({
     required this.id,
@@ -587,11 +714,11 @@ class SurveySlot {
   factory SurveySlot.fromJson(Map<String, dynamic> json) => SurveySlot(
     status: json['status'] as String? ?? '',
     reservationId: json['reservationId']?.toString(),
-    expiresAt: DateTime.tryParse(json['expiresAt'] as String? ?? ''),
+    expiresAt: ServerTime.parse(json['expiresAt']),
   );
 }
 
-/// One answer in a survey submission.
+/// One answer in a survey or campaign-item submission.
 class SurveyAnswer {
   const SurveyAnswer({
     required this.questionId,
@@ -603,6 +730,9 @@ class SurveyAnswer {
   final String questionId;
   final String? optionId;
   final List<String>? optionIds;
+
+  /// A TEXT answer, or a RATING's number as text. Sent as `textAnswer`,
+  /// which the server accepts alongside the docs' `answerText`.
   final String? textAnswer;
 
   /// Something was picked or typed — a blank text box does not count.
@@ -645,9 +775,7 @@ class RewardHistoryItem {
         campaignName: (json['campaignName'] ?? json['title'] ?? '').toString(),
         status: json['status'] as String? ?? '',
         rewardAmount: (json['rewardAmount'] ?? json['amount']) as num?,
-        rewardedAt: DateTime.tryParse(
-          (json['rewardedAt'] ?? json['createdAt'] ?? '').toString(),
-        ),
+        rewardedAt: ServerTime.parse(json['rewardedAt'] ?? json['createdAt']),
       );
 }
 

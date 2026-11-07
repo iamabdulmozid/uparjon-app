@@ -82,4 +82,35 @@ abstract final class ApiErrorCodes {
   static const String alreadyClaimed = 'ALREADY_CLAIMED';
   static const String campaignNotEligible = 'CAMPAIGN_NOT_ELIGIBLE';
   static const String insufficientBalance = 'INSUFFICIENT_BALANCE';
+  static const String notFound = 'NOT_FOUND';
+
+  // Campaign participation rules (API changes 2026-10-11 §4). Each is also
+  // what `/campaigns/{id}/availability` returns as `code` and a content item
+  // as `unavailableCode`; the server's message is safe to show.
+
+  /// `409`: scheduled, the start time has not come yet.
+  static const String campaignNotStarted = 'CAMPAIGN_NOT_STARTED';
+  static const String campaignEnded = 'CAMPAIGN_ENDED';
+
+  /// `409`: paused, cancelled or otherwise not live.
+  static const String campaignInactive = 'CAMPAIGN_INACTIVE';
+  static const String campaignBudgetExhausted = 'CAMPAIGN_BUDGET_EXHAUSTED';
+  static const String participantTargetReached = 'PARTICIPANT_TARGET_REACHED';
+
+  /// `409`: the cashback product is no longer sold.
+  static const String productIneligible = 'PRODUCT_INELIGIBLE';
+
+  /// `403` — a rule about the user's profile, not their session.
+  static const String notInTargetAudience = 'NOT_IN_TARGET_AUDIENCE';
+
+  /// `409`: the user already completed this campaign item.
+  static const String duplicateParticipation = 'DUPLICATE_PARTICIPATION';
+
+  /// `400`: a question was missed, answered twice, or answered in the wrong
+  /// format.
+  static const String invalidAnswer = 'INVALID_ANSWER';
+
+  /// Only ever an item's `unavailableCode`: a standalone survey has no free
+  /// slot right now.
+  static const String surveyFull = 'SURVEY_FULL';
 }

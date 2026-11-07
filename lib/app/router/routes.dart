@@ -35,15 +35,20 @@ abstract final class Routes {
   static const String earnListPath = '/earn/:kind';
 
   /// Earning content. Each takes an `id` path parameter.
-  static const String watchAd = 'watch-ad';
-  static const String watchAdPath = '/earn/ads/:id';
+  ///
+  /// A campaign item — ad, quiz or survey — by its item id.
+  static const String contentItem = 'content-item';
+  static const String contentItemPath = '/earn/items/:id';
 
+  /// A standalone survey (`source: STANDALONE`).
   static const String survey = 'survey';
   static const String surveyPath = '/earn/surveys/:id';
 
+  /// A standalone quiz (`source: STANDALONE`).
   static const String quiz = 'quiz';
   static const String quizPath = '/earn/quizzes/:id';
 
+  /// A campaign's items.
   static const String campaign = 'campaign';
   static const String campaignPath = '/earn/campaigns/:id';
 

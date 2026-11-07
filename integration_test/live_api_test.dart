@@ -6,6 +6,7 @@ import 'package:uparjon/core/config/app_env.dart';
 import 'package:uparjon/core/storage/local_store.dart';
 import 'package:uparjon/features/auth/data/auth_models.dart';
 import 'package:uparjon/features/auth/data/auth_repository.dart';
+import 'package:uparjon/features/earn/data/earn_models.dart';
 import 'package:uparjon/features/earn/data/earn_repository.dart';
 import 'package:uparjon/features/wallet/data/wallet_models.dart';
 import 'package:uparjon/features/wallet/data/wallet_repository.dart';
@@ -56,7 +57,9 @@ void main() {
       final session = await signIn();
       expect(session.accessToken, isNotEmpty);
 
-      final overview = await container.read(walletRepositoryProvider).overview();
+      final overview = await container
+          .read(walletRepositoryProvider)
+          .overview();
 
       // The figures belong to a live account, so assert the shape and the
       // invariants rather than amounts that move between runs.
@@ -101,38 +104,65 @@ void main() {
       expect(summary.thisWeek, greaterThanOrEqualTo(summary.today));
     }, skip: skip);
 
-    testWidgets('every earning feed answers with a reward amount', (
+    testWidgets('every earning list answers with a reward amount', (
       tester,
     ) async {
       await signIn();
       final earn = container.read(earnRepositoryProvider);
 
-      final ads = await earn.adsFeed();
-      final surveys = await earn.surveys();
-      final quizzes = await earn.quizzes();
+      final ads = await earn.contentAds();
+      final quizzes = await earn.contentQuizzes();
+      final surveys = await earn.contentSurveys();
       final campaigns = await earn.campaigns();
 
-      // Staging seeds ads and surveys; quizzes and campaigns are empty, so
-      // those only assert that the call parses.
-      expect(ads, isNotEmpty, reason: 'the ad feed is seeded on staging');
-      expect(surveys, isNotEmpty, reason: 'surveys are seeded on staging');
-
-      for (final ad in ads) {
-        expect(ad.adId, isNotEmpty);
-        expect(ad.reward, isNotNull, reason: 'an ad with no reward is unusable');
-        expect(ad.reward!, greaterThan(0));
-      }
-      for (final survey in surveys) {
-        expect(survey.id, isNotEmpty);
-        expect(survey.rewardAmount, isNotNull);
-        expect(survey.rewardAmount!, greaterThan(0));
-      }
-      for (final quiz in quizzes) {
-        expect(quiz.id, isNotEmpty);
+      // What is listed depends on the account's audience and history, so an
+      // empty list only proves the call parses.
+      for (final (kind, page) in [
+        (ContentKind.ad, ads),
+        (ContentKind.quiz, quizzes),
+        (ContentKind.survey, surveys),
+      ]) {
+        for (final item in page.items) {
+          expect(item.id, isNotEmpty);
+          expect(item.kind, kind, reason: '${item.title} is in the wrong list');
+          expect(item.reward, isNotNull, reason: 'an item with no reward');
+        }
       }
       for (final campaign in campaigns.items) {
         expect(campaign.id, isNotEmpty);
       }
+    }, skip: skip);
+
+    // Read-only: neither call starts a view or submits anything.
+    testWidgets('an item and its campaign open with their questions', (
+      tester,
+    ) async {
+      await signIn();
+      final earn = container.read(earnRepositoryProvider);
+
+      final quizzes = await earn.contentQuizzes();
+      final quiz = quizzes.items
+          .where((item) => !item.isStandalone && item.questionCount > 0)
+          .firstOrNull;
+      if (quiz == null) {
+        markTestSkipped('no campaign quiz is listed for this account');
+        return;
+      }
+
+      final detail = await earn.contentItem(quiz.id);
+      expect(detail.item.id, quiz.id);
+      expect(detail.questions, hasLength(quiz.questionCount));
+
+      final campaign = await earn.campaignItems(quiz.campaignId!);
+      expect(
+        [
+          ...campaign.ads,
+          ...campaign.quizzes,
+          ...campaign.surveys,
+        ].map((item) => item.id),
+        contains(quiz.id),
+      );
+      expect(campaign.completedItems, lessThanOrEqualTo(campaign.totalItems));
     }, skip: skip);
 
     testWidgets('points at the environment it was built for', (tester) async {

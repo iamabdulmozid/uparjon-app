@@ -7,11 +7,11 @@ import '../../features/auth/presentation/otp_screen.dart';
 import '../../features/auth/presentation/reset_password_screen.dart';
 import '../../features/auth/presentation/signup_screen.dart';
 import '../../features/earn/presentation/campaign_screen.dart';
+import '../../features/earn/presentation/content_item_screen.dart';
 import '../../features/earn/presentation/earn_task_kind.dart';
 import '../../features/earn/presentation/quiz_screen.dart';
 import '../../features/earn/presentation/survey_screen.dart';
 import '../../features/earn/presentation/task_list_screen.dart';
-import '../../features/earn/presentation/watch_ad_screen.dart';
 import '../../features/onboarding/presentation/onboarding_screen.dart';
 import '../../features/onboarding/presentation/welcome_screen.dart';
 import '../../features/splash/presentation/splash_screen.dart';
@@ -81,10 +81,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
-        path: Routes.watchAdPath,
-        name: Routes.watchAd,
+        path: Routes.contentItemPath,
+        name: Routes.contentItem,
         builder: (context, state) =>
-            WatchAdScreen(adId: state.pathParameters['id']!),
+            ContentItemScreen(itemId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: Routes.surveyPath,

@@ -3,42 +3,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:uparjon/app/router/routes.dart';
 import 'package:uparjon/core/ui/app_button.dart';
 import 'package:uparjon/features/earn/presentation/campaign_screen.dart';
+import 'package:uparjon/features/earn/presentation/content_item_screen.dart';
+import 'package:uparjon/features/earn/presentation/quiz_screen.dart';
 import 'package:uparjon/features/earn/presentation/task_list_screen.dart';
-import 'package:uparjon/features/earn/presentation/watch_ad_screen.dart';
 
+import '../../support/earn_fixtures.dart';
 import '../../support/fake_api.dart';
 import '../../support/pump_app.dart';
 
-/// A page of items, shaped like Spring's `Page`.
-Map<String, dynamic> springPage(List<Map<String, dynamic>> items) => {
-  'content': items,
-  'number': 0,
-  'size': 20,
-  'totalElements': items.length,
-  'totalPages': items.isEmpty ? 0 : 1,
-  'first': true,
-  'last': true,
-  'empty': items.isEmpty,
-};
+const _view = 'POST /mobile/ads/ad-1/view';
 
-/// Everything the earning screens read on the way to a task, so a flow test
-/// only has to add the endpoints it is about.
-Map<String, FakeReply> earnRoutes({
-  List<Map<String, dynamic>> ads = const [],
-  List<Map<String, dynamic>> campaigns = const [],
-}) => {
-  'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi'}),
-  'GET /mobile/ads/feed': rawJson(ads),
-  'GET /mobile/quizzes': rawJson([]),
-  'GET /mobile/surveys': rawJson([]),
-  'GET /mobile/campaigns': ok(springPage(campaigns)),
-  'GET /mobile/rewards/history': ok(springPage([])),
-  'GET /mobile/tasks/daily': ok([]),
-  'GET /mobile/wallet/earnings-summary': ok({'today': 0}),
-};
+/// The view endpoint's replies in order: the first call opens the view, the
+/// second completes it with [completion]. Both are un-enveloped.
+List<FakeReply> twoCallView(FakeReply completion) => [
+  rawJson({'id': 'v-1', 'adId': 'ad-1', 'status': 'STARTED'}),
+  completion,
+];
 
 /// Drives the reward-producing flows end to end against the fake transport,
-/// checking the request bodies the API actually requires.
+/// checking the request bodies the API actually requires
+/// (`docs/API Docs V2/mobile-api-changes-2026-10-11.md`).
 void main() {
   /// Pushes a runner screen directly, skipping the list and its overview.
   Future<void> open(
@@ -62,28 +46,57 @@ void main() {
     expect(find.byType(TaskListScreen), findsOneWidget);
   }
 
-  group('watch ad', () {
-    const regalAd = {
-      'adId': 'ad-1',
-      'title': 'Regal Furniture',
-      'videoUrl': 'https://cdn.test/regal.mp4',
-      'duration': 3,
-      'reward': 10,
-    };
+  Future<void> watchToTheEnd(WidgetTester tester) async {
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  }
 
-    FakeApi adApi({Map<String, dynamic> ad = regalAd, FakeReply? view}) =>
-        FakeApi({
+  Future<void> press(WidgetTester tester, String label) async {
+    await tester.tap(find.widgetWithText(InkWell, label).last);
+    await tester.pumpAndSettle();
+  }
+
+  VoidCallback? handlerOf(WidgetTester tester, String label) =>
+      tester.widget<AppButton>(find.widgetWithText(AppButton, label)).onPressed;
+
+  List<Map<String, dynamic>> bodiesSentTo(FakeApi api, String key) => [
+    for (final call in api.calls)
+      if ('${call.method} ${call.path}' == key)
+        (call.data as Map).cast<String, dynamic>(),
+  ];
+
+  List<Object?> keysSentTo(FakeApi api, String key) => [
+    for (final call in api.calls)
+      if ('${call.method} ${call.path}' == key) call.headers['Idempotency-Key'],
+  ];
+
+  group('plain ad', () {
+    FakeApi adApi({Map<String, dynamic>? item, List<FakeReply>? view}) {
+      final ad = item ?? contentItem();
+      return FakeApi(
+        {
           ...earnRoutes(ads: [ad]),
-          'POST /mobile/ads/ad-1/view':
+          'GET /mobile/content/ad-1': ok({'item': ad, 'questions': []}),
+        },
+        sequences: {
+          _view:
               view ??
-              ok({
-                'status': 'REWARDED',
-                'rewardEligible': true,
-                'watchedDurationSeconds': 3,
-              }),
-        });
+              twoCallView(
+                rawJson({
+                  'status': 'REWARDED',
+                  'rewardEarned': 10,
+                  'awaitingAnswers': false,
+                }),
+              ),
+        },
+      );
+    }
 
-    testWidgets('overview → watch → verify → congratulation', (tester) async {
+    testWidgets('opens the view on play and completes it at the end', (
+      tester,
+    ) async {
       final api = adApi();
       await openList(tester, api, 'ads');
 
@@ -93,67 +106,92 @@ void main() {
       await tester.tap(find.text('Start'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(WatchAdScreen), findsOneWidget);
+      expect(find.byType(ContentItemScreen), findsOneWidget);
       expect(find.text('Watch till the end'), findsOneWidget);
-      expect(api.bodyOf('POST /mobile/ads/ad-1/view'), isNull);
+      // Nothing is sent until the user presses play.
+      expect(api.callCount(_view), 0);
 
-      // The clock only runs once the user presses play, and nothing is
-      // reported until the video has actually ended.
       await tester.tap(find.byIcon(Icons.play_arrow_rounded));
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
-      expect(api.bodyOf('POST /mobile/ads/ad-1/view'), isNull);
+      // The view was opened before the media ran, and only once.
+      expect(api.callCount(_view), 1);
+      expect(bodiesSentTo(api, _view).single['watchedDurationSeconds'], 0);
 
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
-      final body = api.bodyOf('POST /mobile/ads/ad-1/view')!;
-      expect(body['watchedDurationSeconds'], 3);
-      expect(body['deviceId'], isNotEmpty);
-      expect(
-        api.headersOf('POST /mobile/ads/ad-1/view')!['Idempotency-Key'],
-        isNotNull,
-      );
+      final bodies = bodiesSentTo(api, _view);
+      expect(bodies, hasLength(2));
+      expect(bodies.last['watchedDurationSeconds'], 3);
+      expect(bodies.last['deviceId'], isNotEmpty);
+      // Two separate requests: one key each, or the server would replay the
+      // first answer to the second call.
+      final keys = keysSentTo(api, _view);
+      expect(keys, everyElement(isNotNull));
+      expect(keys.first, isNot(keys.last));
+
       expect(find.text('Congratulation!'), findsOneWidget);
+      expect(find.textContaining('৳10.00 has been added'), findsOneWidget);
 
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
-      expect(find.byType(WatchAdScreen), findsNothing);
+      expect(find.byType(ContentItemScreen), findsNothing);
       expect(find.text('On going Ad'), findsOneWidget);
+    });
+
+    testWidgets('the media waits for the view to open', (tester) async {
+      final api = adApi(
+        view: [
+          (status: 503, body: {'success': false, 'message': 'Down'}),
+          ...twoCallView(rawJson({'status': 'REWARDED', 'rewardEarned': 10})),
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('Could not verify'), findsOneWidget);
+      // The clock never started.
+      expect(find.text('00:00 / 00:03'), findsOneWidget);
+
+      await tester.tap(find.text('Try again'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(api.callCount(_view), 3);
+      expect(find.text('Congratulation!'), findsOneWidget);
     });
 
     testWidgets('a failed view is reported as not rewarded', (tester) async {
       final api = adApi(
-        view: ok({'status': 'FAILED', 'rewardEligible': false}),
+        view: twoCallView(rawJson({'status': 'FAILED', 'rewardEarned': 0})),
       );
-      await open(tester, api, Routes.watchAd, 'ad-1');
-
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
 
       expect(find.text('Not rewarded'), findsOneWidget);
     });
 
-    // The API reports domain rules it treats as impossible states with a
-    // **500** carrying `ILLEGAL_STATE`. Those must reach the user as the rule
-    // they are, not as "our side is broken, try again" — a retry can never
-    // succeed, and the earlier client discarded the errorCode on any 5xx.
-    testWidgets('explains a rejected watch instead of blaming the server', (
+    // Too early leaves the view started (§1.2): the completion may be sent
+    // again, as a new request.
+    testWidgets('a completion sent too early can be sent again', (
       tester,
     ) async {
       final api = adApi(
-        view: apiError(
-          'ILLEGAL_STATE',
-          status: 500,
-          message: 'Insufficient watch duration. Required: 24s, watched: 10s',
-        ),
+        view: [
+          rawJson({'status': 'STARTED'}),
+          apiError(
+            'ILLEGAL_STATE',
+            status: 500,
+            message: 'Insufficient watch duration. Required: 24s, watched: 3s',
+          ),
+          rawJson({'status': 'REWARDED', 'rewardEarned': 10}),
+        ],
       );
-      await open(tester, api, Routes.watchAd, 'ad-1');
-
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
 
       expect(
         find.text('Please watch the whole video to earn this reward.'),
@@ -165,141 +203,164 @@ void main() {
       );
       // The diagnostic text is matched, never shown.
       expect(find.textContaining('Required: 24s'), findsNothing);
+
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Congratulation!'), findsOneWidget);
+      final keys = keysSentTo(api, _view);
+      expect(keys, hasLength(3));
+      expect(keys[1], isNot(keys[2]));
     });
 
     testWidgets('says so when the ad has already paid out', (tester) async {
       final api = adApi(
-        view: apiError(
-          'ILLEGAL_STATE',
-          status: 500,
-          message: 'You have already been rewarded for this ad',
+        view: twoCallView(
+          apiError(
+            'ALREADY_CLAIMED',
+            status: 409,
+            message: 'You have already been rewarded for this ad',
+          ),
         ),
       );
-      await open(tester, api, Routes.watchAd, 'ad-1');
-
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
 
       expect(
         find.text('You have already been rewarded for this one.'),
         findsOneWidget,
       );
+      expect(find.text('Try again'), findsNothing);
     });
 
-    testWidgets('an ad without a video still runs a clock for its duration', (
+    // A 403 that is a campaign rule, not an expired session.
+    testWidgets('an audience refusal shows the reason and keeps the session', (
       tester,
     ) async {
       final api = adApi(
-        ad: {
-          'adId': 'ad-1',
-          'title': 'Regal Furniture',
-          'duration': 3,
-          'reward': 10,
-        },
+        view: [
+          apiError(
+            'NOT_IN_TARGET_AUDIENCE',
+            status: 403,
+            message: 'This campaign is not available in your area.',
+          ),
+        ],
       );
-      await open(tester, api, Routes.watchAd, 'ad-1');
+      await open(tester, api, Routes.contentItem, 'ad-1');
 
-      expect(find.text('Watch till the end'), findsOneWidget);
       await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-      await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
-
-      final body = api.bodyOf('POST /mobile/ads/ad-1/view')!;
-      expect(body['watchedDurationSeconds'], 3);
-      expect(find.text('Congratulation!'), findsOneWidget);
-    });
-
-    // API spec §8.3.2: for a plain ad, COMPLETED now means paid.
-    testWidgets('a completed plain view with rewardEarned is a reward', (
-      tester,
-    ) async {
-      final api = adApi(view: ok({'status': 'COMPLETED', 'rewardEarned': 10}));
-      await open(tester, api, Routes.watchAd, 'ad-1');
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Congratulation!'), findsOneWidget);
-    });
-
-    testWidgets('an ad the feed marks claimed is not played again', (
-      tester,
-    ) async {
-      final api = adApi(
-        ad: {...regalAd, 'viewed': true, 'status': 'COMPLETED'},
-      );
-      await open(tester, api, Routes.watchAd, 'ad-1');
 
       expect(
-        find.text('You have already claimed your reward for this ad.'),
+        find.text('This campaign is not available in your area.'),
         findsOneWidget,
       );
-      expect(find.text('Watch till the end'), findsNothing);
-      expect(api.callCount('POST /mobile/ads/ad-1/view'), 0);
+      expect(find.text('Try again'), findsNothing);
+      expect(find.byType(ContentItemScreen), findsOneWidget);
+      expect(api.callCount('POST /auth/refresh'), 0);
     });
 
-    // Questions come from `GET /ads/{id}` (the feed card has none). The view
-    // is recorded first — the server refuses answers without it — and the
-    // answers are then graded by `/quizzes/submit` or kept by
-    // `/surveys/submit`. See docs/mobile-api-specification.md §8.5.
-    group('with questions', () {
-      const discount = {
-        'id': 'q1',
-        'questionText': 'What was the percentage of discount on the Ad?',
-        'questionType': 'SINGLE_CHOICE',
-        'orderIndex': 1,
-        'options': [
-          {'id': 'p10', 'optionText': '10%'},
-          {'id': 'p15', 'optionText': '15%'},
-        ],
-      };
-      const brand = {
-        'id': 'q2',
-        'questionText': 'Which brand was featured?',
-        'questionType': 'SINGLE_CHOICE',
-        'orderIndex': 2,
-        'options': [
-          {'id': 'regal', 'optionText': 'Regal'},
-          {'id': 'hatil', 'optionText': 'Hatil'},
-        ],
-      };
+    testWidgets('an ad without media still runs a clock for its duration', (
+      tester,
+    ) async {
+      final api = adApi(item: contentItem(mediaUrl: null, mediaType: null));
+      await open(tester, api, Routes.contentItem, 'ad-1');
 
-      Map<String, dynamic> adDetails({
-        String adType = 'QUIZ',
-        List<Map<String, dynamic>> questions = const [discount],
-        int? maxAttempts,
-        String status = 'ACTIVE',
-      }) => {
-        'id': 'ad-1',
-        'title': 'Regal Furniture',
-        'adType': adType,
-        'status': status,
-        'mediaUrl': 'https://cdn.test/regal.mp4',
-        'durationSeconds': 3,
-        'rewardAmount': 10,
-        'passingScore': 100,
-        'maxAttempts': ?maxAttempts,
-        'questions': questions,
-      };
+      expect(find.text('Watch till the end'), findsOneWidget);
+      await watchToTheEnd(tester);
 
-      FakeApi questionApi({
-        Map<String, dynamic>? details,
-        FakeReply? view,
-        List<FakeReply>? quiz,
-      }) => FakeApi(
+      expect(bodiesSentTo(api, _view).last['watchedDurationSeconds'], 3);
+      expect(find.text('Congratulation!'), findsOneWidget);
+    });
+
+    testWidgets('a completed item is not played again', (tester) async {
+      final api = adApi(
+        item: contentItem(progress: 'COMPLETED', available: false),
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+
+      expect(find.text('You have already completed this one.'), findsOneWidget);
+      expect(find.text('Watch till the end'), findsNothing);
+      expect(api.callCount(_view), 0);
+    });
+
+    testWidgets('an unavailable item shows the server reason', (tester) async {
+      final api = adApi(
+        item: contentItem(
+          available: false,
+          unavailableCode: 'CAMPAIGN_BUDGET_EXHAUSTED',
+          unavailableMessage: 'This campaign has run out of budget.',
+        ),
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+
+      expect(find.text('This campaign has run out of budget.'), findsOneWidget);
+      expect(api.callCount(_view), 0);
+    });
+  });
+
+  // Quizzes and surveys of a campaign: the media first, its view in two
+  // calls, then the questions, submitted once to `/quizzes/submit` or
+  // `/surveys/submit`.
+  group('with questions', () {
+    const discount = {
+      'id': 'q1',
+      'questionText': 'What was the percentage of discount on the Ad?',
+      'questionType': 'SINGLE_CHOICE',
+      'isRequired': true,
+      'orderIndex': 1,
+      'options': [
+        {'id': 'p10', 'optionText': '10%'},
+        {'id': 'p15', 'optionText': '15%'},
+      ],
+    };
+    const brand = {
+      'id': 'q2',
+      'questionText': 'Which brand was featured?',
+      'questionType': 'SINGLE_CHOICE',
+      'isRequired': true,
+      'orderIndex': 2,
+      'options': [
+        {'id': 'regal', 'optionText': 'Regal'},
+        {'id': 'hatil', 'optionText': 'Hatil'},
+      ],
+    };
+
+    const awaitingAnswers = (
+      status: 200,
+      body: {'status': 'COMPLETED', 'awaitingAnswers': true, 'rewardEarned': 0},
+    );
+
+    FakeApi questionApi({
+      String kind = 'QUIZ',
+      String progress = 'NOT_STARTED',
+      List<Map<String, dynamic>> questions = const [discount],
+      List<FakeReply>? view,
+      List<FakeReply>? quiz,
+      FakeReply? survey,
+    }) {
+      final item = contentItem(
+        kind: kind,
+        questionCount: questions.length,
+        progress: progress,
+      );
+      return FakeApi(
         {
-          ...earnRoutes(ads: [regalAd]),
-          'GET /ads/ad-1': ok(details ?? adDetails()),
-          'POST /mobile/ads/ad-1/view':
-              view ?? ok({'status': 'COMPLETED', 'rewardEligible': false}),
-          'POST /surveys/submit': rawJson({
-            'passed': true,
-            'totalQuestions': 2,
-            'rewardTriggered': true,
+          ...earnRoutes(quizzes: [item]),
+          'GET /mobile/content/ad-1': ok({
+            'item': item,
+            'questions': questions,
           }),
+          'POST /surveys/submit':
+              survey ??
+              rawJson({
+                'passed': true,
+                'totalQuestions': questions.length,
+                'rewardEarned': 10,
+              }),
         },
         sequences: {
+          _view: view ?? twoCallView(awaitingAnswers),
           'POST /quizzes/submit':
               quiz ??
               [
@@ -307,381 +368,460 @@ void main() {
                   'passed': true,
                   'score': 1,
                   'totalQuestions': 1,
-                  'pointsEarned': 10,
-                  'rewardTriggered': true,
+                  'rewardEarned': 10,
+                  'cashbackPromised': 0,
                 }),
               ],
         },
       );
+    }
 
-      Future<void> watchToTheEnd(WidgetTester tester) async {
-        await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-        await tester.pump(const Duration(seconds: 3));
-        await tester.pumpAndSettle();
-      }
+    Future<void> answerOne(WidgetTester tester, String option) async {
+      await tester.tap(find.text(option));
+      await tester.pumpAndSettle();
+      await press(tester, 'Submit');
+    }
 
-      Future<void> press(WidgetTester tester, String label) async {
-        await tester.tap(find.widgetWithText(InkWell, label).last);
-        await tester.pumpAndSettle();
-      }
+    testWidgets('completes the view, walks the questions, submits once', (
+      tester,
+    ) async {
+      final api = questionApi(questions: [brand, discount]);
+      await open(tester, api, Routes.contentItem, 'ad-1');
 
-      VoidCallback? handlerOf(WidgetTester tester, String label) => tester
-          .widget<AppButton>(find.widgetWithText(AppButton, label))
-          .onPressed;
+      expect(find.text('Quiz'), findsOneWidget);
+      expect(
+        find.textContaining('After the video, 2 questions will appear'),
+        findsOneWidget,
+      );
+      await watchToTheEnd(tester);
 
-      List<Object?> keysSentTo(FakeApi api, String key) => [
-        for (final call in api.calls)
-          if ('${call.method} ${call.path}' == key)
-            call.headers['Idempotency-Key'],
-      ];
+      // Both view calls went first, with no answer in them.
+      final views = bodiesSentTo(api, _view);
+      expect(views, hasLength(2));
+      expect(
+        views.last.keys,
+        unorderedEquals(['watchedDurationSeconds', 'deviceId']),
+      );
+      expect(api.callCount('POST /quizzes/submit'), 0);
 
-      testWidgets('records the view, walks the questions, submits for '
-          'grading', (tester) async {
-        final api = questionApi(
-          details: adDetails(questions: [brand, discount]),
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
+      // Ordered by orderIndex, not by arrival; every question is required.
+      expect(find.text('Question 1 of 2'), findsOneWidget);
+      expect(
+        find.text('What was the percentage of discount on the Ad?'),
+        findsOneWidget,
+      );
+      expect(handlerOf(tester, 'Next'), isNull);
 
-        expect(
-          find.textContaining('After the video, 2 questions will appear'),
-          findsOneWidget,
-        );
-        await watchToTheEnd(tester);
+      await tester.tap(find.text('15%'));
+      await tester.pumpAndSettle();
+      await press(tester, 'Next');
+      expect(find.text('Question 2 of 2'), findsOneWidget);
 
-        // The view went first, without any answer in it.
-        final view = api.bodyOf('POST /mobile/ads/ad-1/view')!;
-        expect(
-          view.keys,
-          unorderedEquals(['watchedDurationSeconds', 'deviceId']),
-        );
-        expect(view['watchedDurationSeconds'], 3);
-        expect(api.callCount('POST /quizzes/submit'), 0);
+      // Back keeps the earlier answer.
+      await press(tester, 'Back');
+      expect(handlerOf(tester, 'Next'), isNotNull);
+      await press(tester, 'Next');
 
-        // Ordered by orderIndex, not by arrival.
-        expect(find.text('Question 1 of 2'), findsOneWidget);
-        expect(
-          find.text('What was the percentage of discount on the Ad?'),
-          findsOneWidget,
-        );
-        expect(handlerOf(tester, 'Next'), isNull);
+      await answerOne(tester, 'Regal');
 
-        await tester.tap(find.text('15%'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Next');
-        expect(find.text('Question 2 of 2'), findsOneWidget);
-
-        // Back keeps the earlier answer.
-        await press(tester, 'Back');
-        expect(handlerOf(tester, 'Next'), isNotNull);
-        await press(tester, 'Next');
-
-        await tester.tap(find.text('Regal'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Submit');
-
-        expect(api.bodyOf('POST /quizzes/submit'), {
-          'adId': 'ad-1',
-          'answers': [
-            {'questionId': 'q1', 'optionId': 'p15'},
-            {'questionId': 'q2', 'optionId': 'regal'},
-          ],
-        });
-        expect(keysSentTo(api, 'POST /quizzes/submit').single, isNotNull);
-        expect(api.callCount('POST /surveys/submit'), 0);
-        expect(find.text('Congratulation!'), findsOneWidget);
-        expect(find.textContaining('Your answers are correct'), findsOneWidget);
+      expect(api.bodyOf('POST /quizzes/submit'), {
+        'adId': 'ad-1',
+        'answers': [
+          {'questionId': 'q1', 'optionId': 'p15'},
+          {'questionId': 'q2', 'optionId': 'regal'},
+        ],
       });
+      expect(keysSentTo(api, 'POST /quizzes/submit').single, isNotNull);
+      expect(api.callCount('POST /surveys/submit'), 0);
+      expect(find.text('Congratulation!'), findsOneWidget);
+      expect(find.textContaining('Your answers are correct'), findsOneWidget);
+      expect(find.textContaining('৳10.00 has been added'), findsOneWidget);
+    });
 
-      testWidgets('a wrong answer can be retried while attempts remain', (
-        tester,
-      ) async {
-        final api = questionApi(
-          details: adDetails(maxAttempts: 2),
-          quiz: [
-            rawJson({'passed': false, 'score': 0, 'rewardTriggered': false}),
-            rawJson({'passed': true, 'score': 1, 'rewardTriggered': true}),
-          ],
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
-        await watchToTheEnd(tester);
+    // One submission per item: a failed quiz is done for good.
+    testWidgets('a wrong answer ends the quiz without a retry', (tester) async {
+      final api = questionApi(
+        quiz: [
+          rawJson({'passed': false, 'score': 0, 'rewardEarned': 0}),
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+      await answerOne(tester, '10%');
 
-        await tester.tap(find.text('10%'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Submit');
-        expect(find.text('Wrong Answer!'), findsOneWidget);
+      expect(find.text('Wrong Answer!'), findsOneWidget);
+      expect(find.textContaining('the reward this time'), findsOneWidget);
+      expect(find.text('Try again'), findsNothing);
 
-        await tester.tap(find.text('Try again'));
-        await tester.pumpAndSettle();
-        // A fresh attempt: nothing picked, and the view is not re-sent.
-        expect(handlerOf(tester, 'Submit'), isNull);
-        expect(api.callCount('POST /mobile/ads/ad-1/view'), 1);
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ContentItemScreen), findsNothing);
+    });
 
-        await tester.tap(find.text('15%'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Submit');
+    testWidgets('a dropped submission is retried with the same key', (
+      tester,
+    ) async {
+      final api = questionApi(
+        quiz: [
+          (status: 503, body: {'success': false, 'message': 'Down'}),
+          rawJson({'passed': true, 'score': 1, 'rewardEarned': 10}),
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+      await answerOne(tester, '15%');
 
-        expect(find.text('Congratulation!'), findsOneWidget);
-        final keys = keysSentTo(api, 'POST /quizzes/submit');
-        expect(keys, hasLength(2));
-        expect(keys.first, isNot(keys.last));
+      expect(find.text('Could not verify'), findsOneWidget);
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Congratulation!'), findsOneWidget);
+      final keys = keysSentTo(api, 'POST /quizzes/submit');
+      expect(keys, hasLength(2));
+      expect(keys.first, keys.last);
+    });
+
+    testWidgets('an item done elsewhere says so and is final', (tester) async {
+      final api = questionApi(
+        quiz: [
+          apiError(
+            'DUPLICATE_PARTICIPATION',
+            status: 409,
+            message: 'You already took part in this item',
+          ),
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+      await answerOne(tester, '15%');
+
+      expect(find.text('You have already completed this one.'), findsOneWidget);
+      expect(find.text('Try again'), findsNothing);
+    });
+
+    testWidgets('a refused answer goes back to the questions', (tester) async {
+      final api = questionApi(
+        quiz: [
+          apiError(
+            'INVALID_ANSWER',
+            message: 'Question q1 has an option that is not one of its own',
+          ),
+          rawJson({'passed': true, 'score': 1, 'rewardEarned': 10}),
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+      await answerOne(tester, '15%');
+
+      expect(find.text('Check your answers'), findsOneWidget);
+      await tester.tap(find.text('Review answers'));
+      await tester.pumpAndSettle();
+
+      // The answer is kept, so Submit works straight away.
+      expect(
+        find.text('What was the percentage of discount on the Ad?'),
+        findsOneWidget,
+      );
+      expect(handlerOf(tester, 'Submit'), isNotNull);
+      await press(tester, 'Submit');
+
+      expect(find.text('Congratulation!'), findsOneWidget);
+      final keys = keysSentTo(api, 'POST /quizzes/submit');
+      expect(keys.first, isNot(keys.last));
+      // The view is not sent again.
+      expect(api.callCount(_view), 2);
+    });
+
+    testWidgets('a refused view never reaches the questions', (tester) async {
+      final api = questionApi(view: twoCallView(rawJson({'status': 'FAILED'})));
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+
+      expect(find.text('Not rewarded'), findsOneWidget);
+      expect(
+        find.text('What was the percentage of discount on the Ad?'),
+        findsNothing,
+      );
+      expect(api.callCount('POST /quizzes/submit'), 0);
+    });
+
+    testWidgets('answers pending opens straight on the questions', (
+      tester,
+    ) async {
+      final api = questionApi(progress: 'ANSWERS_PENDING');
+      await open(tester, api, Routes.contentItem, 'ad-1');
+
+      expect(find.text('Watch till the end'), findsNothing);
+      expect(
+        find.text('What was the percentage of discount on the Ad?'),
+        findsOneWidget,
+      );
+      await answerOne(tester, '15%');
+
+      expect(api.callCount(_view), 0);
+      expect(find.text('Congratulation!'), findsOneWidget);
+    });
+
+    testWidgets('a survey sends every answer to /surveys/submit', (
+      tester,
+    ) async {
+      final api = questionApi(
+        kind: 'SURVEY',
+        questions: [
+          {
+            'id': 's1',
+            'questionText': 'Rate the ad',
+            'questionType': 'RATING',
+            'isRequired': true,
+            'minVal': 1,
+            'maxVal': 5,
+          },
+          {
+            'id': 's2',
+            'questionText': 'Anything else?',
+            'questionType': 'TEXT',
+            // Every question is mandatory now, whatever the flag says.
+            'isRequired': false,
+          },
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+
+      await tester.tap(find.text('4'));
+      await tester.pumpAndSettle();
+      await press(tester, 'Next');
+
+      expect(handlerOf(tester, 'Submit'), isNull);
+      await tester.enterText(find.byType(TextFormField), 'Clear and short');
+      await tester.pumpAndSettle();
+      await press(tester, 'Submit');
+
+      expect(api.bodyOf('POST /surveys/submit'), {
+        'adId': 'ad-1',
+        'answers': [
+          {'questionId': 's1', 'textAnswer': '4'},
+          {'questionId': 's2', 'textAnswer': 'Clear and short'},
+        ],
       });
+      expect(api.callCount('POST /quizzes/submit'), 0);
+      expect(find.text('Congratulation!'), findsOneWidget);
+      expect(find.textContaining('Thanks for your feedback'), findsOneWidget);
+    });
 
-      testWidgets('the last attempt ends on Wrong Answer!', (tester) async {
-        final api = questionApi(
-          quiz: [
-            rawJson({'passed': false, 'score': 0, 'rewardTriggered': false}),
-          ],
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
-        await watchToTheEnd(tester);
-        await tester.tap(find.text('10%'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Submit');
-
-        expect(find.text('Wrong Answer!'), findsOneWidget);
-        expect(find.textContaining('the reward this time'), findsOneWidget);
-        expect(find.text('Try again'), findsNothing);
-
-        await tester.tap(find.text('Continue'));
-        await tester.pumpAndSettle();
-        expect(find.byType(WatchAdScreen), findsNothing);
-      });
-
-      testWidgets('a dropped submission is retried with the same key', (
-        tester,
-      ) async {
-        final api = questionApi(
-          quiz: [
-            (status: 503, body: {'success': false, 'message': 'Down'}),
-            rawJson({'passed': true, 'score': 1, 'rewardTriggered': true}),
-          ],
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
-        await watchToTheEnd(tester);
-        await tester.tap(find.text('15%'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Submit');
-
-        expect(find.text('Could not verify'), findsOneWidget);
-        await tester.tap(find.text('Try again'));
-        await tester.pumpAndSettle();
-
-        expect(find.text('Congratulation!'), findsOneWidget);
-        final keys = keysSentTo(api, 'POST /quizzes/submit');
-        expect(keys, hasLength(2));
-        expect(keys.first, keys.last);
-      });
-
-      testWidgets('a claimed ad says so instead of a generic error', (
-        tester,
-      ) async {
-        final api = questionApi(
-          quiz: [
-            apiError(
-              'ALREADY_CLAIMED',
-              status: 409,
-              message:
-                  'You have already completed and claimed the reward for '
-                  'this ad',
-            ),
-          ],
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
-        await watchToTheEnd(tester);
-        await tester.tap(find.text('15%'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Submit');
-
-        expect(
-          find.text('You have already been rewarded for this one.'),
-          findsOneWidget,
-        );
-        expect(
-          find.text('This action is not available right now.'),
-          findsNothing,
-        );
-        // A settled claim is final — no retry offered.
-        expect(find.text('Try again'), findsNothing);
-      });
-
-      testWidgets('a refused view never reaches the questions', (tester) async {
-        final api = questionApi(
-          view: ok({'status': 'FAILED', 'rewardEligible': false}),
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
-        await watchToTheEnd(tester);
-
-        expect(find.text('Not rewarded'), findsOneWidget);
-        expect(
-          find.text('What was the percentage of discount on the Ad?'),
-          findsNothing,
-        );
-        expect(api.callCount('POST /quizzes/submit'), 0);
-      });
-
-      testWidgets('a survey ad sends its feedback to /surveys/submit', (
-        tester,
-      ) async {
-        final api = questionApi(
-          details: adDetails(
-            adType: 'SURVEY',
-            questions: [
+    // Cashback is promised, not paid: it must not read as earned.
+    testWidgets('a cashback question promises cashback after purchase', (
+      tester,
+    ) async {
+      final api = questionApi(
+        questions: [
+          {
+            ...discount,
+            'rewardMode': 'PURCHASE_CASHBACK',
+            'rewardAmount': 50,
+            'productUrl': 'https://store.test/rice-cooker',
+            'purchaseWindowDays': 7,
+          },
+        ],
+        quiz: [
+          rawJson({
+            'passed': true,
+            'rewardEarned': 0,
+            'cashbackPromised': 50,
+            'cashback': [
               {
-                'id': 's1',
-                'questionText': 'Rate the ad',
-                'questionType': 'RATING',
-                'isRequired': true,
-                'minVal': 1,
-                'maxVal': 5,
-              },
-              {
-                'id': 's2',
-                'questionText': 'Anything else?',
-                'questionType': 'TEXT',
-                'isRequired': false,
+                'cashbackId': 'cb-1',
+                'questionId': 'q1',
+                'amount': 50,
+                'status': 'AWAITING_PURCHASE',
+                'purchaseDeadline': '2026-11-08T23:59:00',
               },
             ],
-          ),
-        );
-        await open(tester, api, Routes.watchAd, 'ad-1');
-        await watchToTheEnd(tester);
+          }),
+        ],
+      );
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
 
-        expect(handlerOf(tester, 'Next'), isNull);
-        await tester.tap(find.text('4'));
-        await tester.pumpAndSettle();
-        await press(tester, 'Next');
+      expect(
+        find.text(
+          'Buy this product from the store within 7 days to get ৳50.00 '
+          'cashback.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('https://store.test/rice-cooker'), findsOneWidget);
+      await answerOne(tester, '15%');
 
-        // Optional: Submit works with the box left empty.
-        await press(tester, 'Submit');
-
-        expect(api.bodyOf('POST /surveys/submit'), {
-          'adId': 'ad-1',
-          'answers': [
-            {'questionId': 's1', 'textAnswer': '4'},
-          ],
-        });
-        expect(api.callCount('POST /quizzes/submit'), 0);
-        expect(find.text('Congratulation!'), findsOneWidget);
-        expect(find.textContaining('Thanks for your feedback'), findsOneWidget);
-      });
-
-      testWidgets('an ad taken off sale is not played', (tester) async {
-        final api = questionApi(details: adDetails(status: 'PAUSED'));
-        await open(tester, api, Routes.watchAd, 'ad-1');
-
-        expect(find.text('This ad is no longer available.'), findsOneWidget);
-        expect(find.text('Watch till the end'), findsNothing);
-      });
-
-      testWidgets('without ad details the feed card still plays', (
-        tester,
-      ) async {
-        // `GET /ads/ad-1` is not routed, so it answers 404.
-        final api = adApi();
-        await open(tester, api, Routes.watchAd, 'ad-1');
-
-        expect(
-          find.textContaining('Watch the full video without skipping'),
-          findsOneWidget,
-        );
-        await watchToTheEnd(tester);
-        expect(find.text('Congratulation!'), findsOneWidget);
-      });
+      expect(find.text('Cashback reserved'), findsOneWidget);
+      expect(
+        find.textContaining('Buy the product from the store by'),
+        findsOneWidget,
+      );
+      expect(find.text('Congratulation!'), findsNothing);
     });
   });
 
   group('campaign', () {
-    const tryOurApp = {
+    const card = {
       'id': 'c-1',
-      'title': 'Try our app',
-      'campaignType': 'INSTALL',
+      'title': 'Kitchen week',
+      'contentType': 'QUIZ',
+      'contentTypeLabel': 'Quiz',
       'rewardAmount': 50,
+      'status': 'ACTIVE',
     };
 
-    FakeApi campaignApi({bool eligible = true, FakeReply? start}) => FakeApi({
-      ...earnRoutes(campaigns: [tryOurApp]),
-      'GET /mobile/campaigns/c-1': ok({
-        'id': 'c-1',
-        'title': 'Try our app',
-        'description': 'Install and open it once.',
-        'instructions': '1. Install the app\n2. Open it once',
-        'rewardAmount': 50,
-        'eligible': eligible,
-      }),
-      'POST /mobile/campaigns/c-1/start': start ?? ok({'sessionId': 'sess-1'}),
-      'POST /mobile/campaigns/c-1/complete': ok({'sessionId': 'sess-1'}),
-    });
+    final ad = contentItem(title: 'New rice cooker');
+    final quiz = contentItem(
+      id: 'q-ad',
+      kind: 'QUIZ',
+      title: 'Logo colours',
+      questionCount: 2,
+      progress: 'COMPLETED',
+      available: false,
+      unavailableCode: 'DUPLICATE_PARTICIPATION',
+    );
+    final survey = contentItem(
+      id: 's-ad',
+      kind: 'SURVEY',
+      title: 'Kitchen habits',
+      questionCount: 3,
+      available: false,
+      unavailableCode: 'PARTICIPANT_TARGET_REACHED',
+      unavailableMessage: 'This campaign is full.',
+    );
 
-    testWidgets('overview → start → complete leaves the reward pending', (
-      tester,
-    ) async {
+    Map<String, dynamic> items({int completed = 1}) => {
+      'id': 'c-1',
+      'title': 'Kitchen week',
+      'description': 'Cook more at home.',
+      'bannerUrl': null,
+      'contentTypeLabel': 'Quiz',
+      'startAt': '2026-10-01T00:00:00',
+      'endAt': null,
+      'totalItems': 3,
+      'completedItems': completed,
+      'ads': [ad],
+      'quizzes': [quiz],
+      'surveys': [survey],
+    };
+
+    FakeApi campaignApi({FakeReply? itemsReply}) => FakeApi(
+      {
+        ...earnRoutes(campaigns: [card]),
+        'GET /mobile/campaigns/c-1/items': itemsReply ?? ok(items()),
+        'GET /mobile/content/ad-1': ok({'item': ad, 'questions': []}),
+      },
+      sequences: {
+        _view: twoCallView(rawJson({'status': 'REWARDED', 'rewardEarned': 10})),
+      },
+    );
+
+    testWidgets('lists every item with its state and runs one', (tester) async {
       final api = campaignApi();
       await openList(tester, api, 'campaigns');
+      expect(find.text('Quiz'), findsOneWidget);
 
-      await tester.tap(find.text('Try our app'));
+      await tester.tap(find.text('Kitchen week'));
       await tester.pumpAndSettle();
-      expect(find.text('About this campaign'), findsOneWidget);
-      expect(find.text('Install and open it once.'), findsOneWidget);
-      expect(find.text('Install the app'), findsOneWidget);
-      expect(find.textContaining('৳50.00'), findsWidgets);
 
+      expect(find.byType(CampaignScreen), findsOneWidget);
+      expect(find.text('Cook more at home.'), findsOneWidget);
+      expect(find.text('1 of 3 done'), findsOneWidget);
+      expect(find.text('Ads'), findsOneWidget);
+      expect(find.text('Quizzes'), findsOneWidget);
+      expect(find.text('Surveys'), findsOneWidget);
+      // Done, and closed with the server's reason.
+      expect(find.text('Completed'), findsOneWidget);
+      expect(find.text('This campaign is full.'), findsOneWidget);
+
+      // A closed item explains itself instead of starting.
+      await tester.tap(find.text('Kitchen habits'));
+      await tester.pumpAndSettle();
+      expect(find.text('Overview'), findsNothing);
+
+      await tester.tap(find.text('New rice cooker'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Start'));
       await tester.pumpAndSettle();
+      expect(find.byType(ContentItemScreen), findsOneWidget);
 
-      expect(api.callCount('POST /mobile/campaigns/c-1/start'), 1);
-      expect(find.byType(CampaignScreen), findsOneWidget);
-      await tester.tap(find.text('Mark as Complete'));
-      await tester.pumpAndSettle();
+      await watchToTheEnd(tester);
+      expect(find.text('Congratulation!'), findsOneWidget);
+      expect(api.callCount('POST /mobile/campaigns/c-1/start'), 0);
 
-      expect(api.callCount('POST /mobile/campaigns/c-1/complete'), 1);
-      expect(
-        api.headersOf(
-          'POST /mobile/campaigns/c-1/complete',
-        )!['Idempotency-Key'],
-        isNotNull,
-      );
-      expect(find.text('Completed!'), findsOneWidget);
-
+      // Back on the campaign, its items are fetched again for the new state.
+      final before = api.callCount('GET /mobile/campaigns/c-1/items');
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
-      expect(find.byType(CampaignScreen), findsNothing);
+      expect(find.byType(CampaignScreen), findsOneWidget);
+      expect(
+        api.callCount('GET /mobile/campaigns/c-1/items'),
+        greaterThan(before),
+      );
     });
 
-    testWidgets('an ineligible campaign is dropped from the feed', (
-      tester,
-    ) async {
+    testWidgets('a campaign that is no longer live says so', (tester) async {
       final api = campaignApi(
-        start: apiError(
-          'CAMPAIGN_NOT_ELIGIBLE',
-          status: 403,
-          message: 'You are not eligible',
+        itemsReply: apiError(
+          'NOT_FOUND',
+          status: 404,
+          message: 'Campaign not found',
         ),
       );
       await open(tester, api, Routes.campaign, 'c-1');
 
-      // Bounced back rather than left on a campaign that cannot be run.
-      expect(find.byType(CampaignScreen), findsNothing);
-      expect(find.textContaining('You are not eligible'), findsOneWidget);
-    });
-
-    testWidgets('the overview keeps Start disabled when not eligible', (
-      tester,
-    ) async {
-      await openList(tester, campaignApi(eligible: false), 'campaigns');
-
-      await tester.tap(find.text('Try our app'));
-      await tester.pumpAndSettle();
       expect(
-        find.text('You are not eligible for this campaign right now.'),
+        find.text('This campaign is no longer available.'),
         findsOneWidget,
       );
-
-      await tester.tap(find.text('Start'));
-      await tester.pumpAndSettle();
-      // Still on the overview: nothing was started.
-      expect(find.text('Overview'), findsOneWidget);
-      expect(find.byType(CampaignScreen), findsNothing);
+      expect(find.text('Retry'), findsNothing);
     });
+  });
+
+  // Standalone quizzes and surveys are listed with the campaign items but
+  // keep their own endpoints and screens.
+  testWidgets('a standalone quiz opens the quiz screen', (tester) async {
+    final api = FakeApi({
+      ...earnRoutes(
+        quizzes: [
+          contentItem(
+            id: 'q-1',
+            kind: 'QUIZ',
+            source: 'STANDALONE',
+            title: 'General knowledge',
+            mediaUrl: null,
+            mediaType: null,
+            questionCount: 1,
+          ),
+        ],
+      ),
+      'GET /mobile/quizzes/q-1': ok({
+        'id': 'q-1',
+        'title': 'General knowledge',
+        'questions': [
+          {
+            'id': 'q1',
+            'questionText': 'Capital of Bangladesh?',
+            'options': [
+              {'id': 'o1', 'optionText': 'Dhaka'},
+            ],
+          },
+        ],
+      }),
+    });
+    await openList(tester, api, 'quizzes');
+
+    await tester.tap(find.text('General knowledge'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Score at least 60%'), findsOneWidget);
+    await tester.tap(find.text('Start'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(QuizScreen), findsOneWidget);
+    expect(find.text('Capital of Bangladesh?'), findsOneWidget);
+    expect(api.callCount('GET /mobile/content/q-1'), 0);
   });
 
   group('quiz', () {

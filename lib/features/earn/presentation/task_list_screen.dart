@@ -5,24 +5,23 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router/routes.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/error/failure.dart';
-import '../../../core/services/snackbar_service.dart';
 import '../../../core/ui/list_state_message.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/earn_models.dart';
 import 'earn_providers.dart';
 import 'earn_task_kind.dart';
-import 'widgets/campaign_overview_dialog.dart';
+import 'widgets/content_item_tile.dart';
 import 'widgets/earn_stat_card.dart';
 import 'widgets/earn_task_card.dart';
-import 'widgets/task_overview_dialog.dart';
 
 /// One earning category (Figma: "Uparjon - Ad list", "Uparjon - Survey list"):
 /// today's earning, the tasks still open, and the ones already completed.
 ///
-/// Tapping a task opens its overview; Start pushes the runner screen. Tasks
-/// the user already claimed stay listed (the API keeps them as history), but
-/// sit last, carry a Completed badge, and only explain themselves when
-/// tapped.
+/// Ads, quizzes and surveys come from `GET /mobile/content/*`; tapping one
+/// opens its overview, and Start pushes the screen that runs it. Tapping a
+/// campaign opens the campaign screen with all of its items. Tasks the user
+/// already completed stay listed as history, but sit last, carry a Completed
+/// badge, and only explain themselves when tapped.
 class TaskListScreen extends ConsumerWidget {
   const TaskListScreen({super.key, required this.kind});
 
@@ -30,7 +29,7 @@ class TaskListScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final items = _itemsOf(ref);
+    final items = _itemsOf(context, ref);
     final earnings = ref.watch(earningsSummaryProvider);
     final completed =
         ref.watch(rewardHistoryProvider).value?.items ??
@@ -76,11 +75,10 @@ class TaskListScreen extends ConsumerWidget {
                   Expanded(
                     child: EarnStatCard(
                       child: EarnValueStat(
-                        value: items.value == null
-                            ? '—'
-                            : Formatters.twoDigits(
-                                items.value!.where((i) => !i.completed).length,
-                              ),
+                        value: switch (watchKindCount(ref, kind).value) {
+                          null => '—',
+                          final count => Formatters.twoDigits(count),
+                        },
                         label: kind.countLabel,
                       ),
                     ),
@@ -111,21 +109,9 @@ class TaskListScreen extends ConsumerWidget {
                   onRetry: () => invalidateEarnFeeds(ref),
                 ),
               ],
-              data: (list) => list.isEmpty
+              data: (cards) => cards.isEmpty
                   ? [ListStateMessage(message: kind.emptyMessage)]
-                  : [
-                      for (final item in list)
-                        EarnTaskCard(
-                          title: item.title,
-                          icon: kind.icon,
-                          iconColor: kind.color,
-                          iconBackground: kind.tint,
-                          subtitle: item.subtitle,
-                          reward: Formatters.rewardOrNull(item.reward),
-                          completed: item.completed,
-                          onTap: () => _open(context, item),
-                        ),
-                    ],
+                  : cards,
             ),
             if (completed.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -163,215 +149,57 @@ class TaskListScreen extends ConsumerWidget {
               '${Formatters.taka(amount)}';
   }
 
-  Future<void> _open(BuildContext context, _TaskItem item) async {
-    if (item.completed) {
-      SnackbarService.showInfo(kind.alreadyClaimedMessage);
-      return;
+  /// Open tasks first, completed ones after, each group in list order.
+  AsyncValue<List<Widget>> _itemsOf(BuildContext context, WidgetRef ref) {
+    if (kind == EarnTaskKind.campaigns) {
+      return ref.watch(campaignsProvider).whenData((page) {
+        final cards = [
+          ...page.items.where((c) => !c.isCompleted),
+          ...page.items.where((c) => c.isCompleted),
+        ];
+        return [
+          for (final campaign in cards)
+            EarnTaskCard(
+              title: campaign.title,
+              icon: kind.icon,
+              iconColor: kind.color,
+              iconBackground: kind.tint,
+              subtitle: _campaignSubtitle(campaign),
+              reward: Formatters.rewardOrNull(campaign.rewardAmount),
+              completed: campaign.isCompleted,
+              // Completed campaigns still open: their items are the record
+              // of what the user did.
+              onTap: () => context.pushNamed(
+                Routes.campaign,
+                pathParameters: {'id': campaign.id},
+              ),
+            ),
+        ];
+      });
     }
-    final start = await showOverviewDialog(context, item.overview);
-    if (!start || !context.mounted) return;
-    await context.pushNamed(item.route, pathParameters: {'id': item.id});
+
+    return ref.watch(contentListProvider(kind)).whenData((page) {
+      final items = [
+        ...page.items.where((i) => !i.isCompleted),
+        ...page.items.where((i) => i.isCompleted),
+      ];
+      return [
+        for (final item in items)
+          ContentItemCard(
+            item: item,
+            onTap: () => openContentItem(context, item),
+          ),
+      ];
+    });
   }
 
-  /// Open tasks first, claimed ones after, each group in feed order.
-  AsyncValue<List<_TaskItem>> _itemsOf(WidgetRef ref) => _feedOf(ref).whenData(
-    (items) => [
-      ...items.where((i) => !i.completed),
-      ...items.where((i) => i.completed),
-    ],
-  );
-
-  AsyncValue<List<_TaskItem>> _feedOf(WidgetRef ref) => switch (kind) {
-    EarnTaskKind.ads =>
-      ref
-          .watch(adsFeedProvider)
-          .whenData((ads) => [for (final ad in ads) _TaskItem.ad(ad)]),
-    EarnTaskKind.quizzes =>
-      ref
-          .watch(quizzesProvider)
-          .whenData(
-            (quizzes) => [for (final quiz in quizzes) _TaskItem.quiz(quiz)],
-          ),
-    EarnTaskKind.surveys =>
-      ref
-          .watch(surveysProvider)
-          .whenData(
-            (surveys) => [
-              for (final survey in surveys) _TaskItem.survey(survey),
-            ],
-          ),
-    EarnTaskKind.campaigns =>
-      ref
-          .watch(campaignsProvider)
-          .whenData(
-            (page) => [
-              for (final campaign in page.items) _TaskItem.campaign(campaign),
-            ],
-          ),
-  };
-}
-
-/// What the list needs from any task type: the card copy, where Start goes,
-/// and the overview to show first.
-class _TaskItem {
-  const _TaskItem({
-    required this.id,
-    required this.title,
-    required this.route,
-    required this.overview,
-    this.subtitle,
-    this.reward,
-    this.completed = false,
-  });
-
-  final String id;
-  final String title;
-  final String route;
-  final Widget overview;
-  final String? subtitle;
-  final num? reward;
-
-  /// Already claimed by this user.
-  final bool completed;
-
-  factory _TaskItem.ad(VideoAd ad) => _TaskItem(
-    id: ad.adId,
-    title: ad.title,
-    route: Routes.watchAd,
-    reward: ad.reward,
-    completed: ad.isCompleted,
-    subtitle: ad.duration == null
-        ? null
-        : Formatters.approxDuration(ad.duration!),
-    overview: TaskOverviewDialog(
-      child: TaskOverviewBody(
-        kind: EarnTaskKind.ads,
-        title: ad.title,
-        sections: [
-          OverviewSection(
-            'Before you start',
-            bullets: [
-              'Watch the video till the end',
-              // The feed card cannot say whether questions follow — only
-              // `GET /ads/{id}` knows — so the copy covers both.
-              'If a question follows, answer it correctly.',
-              "You can't skip the video",
-            ],
-          ),
-          rewardSection(
-            lead: 'Complete the ad to receive',
-            amount: ad.reward,
-            tail: 'The reward will be added to your wallet after verification',
-          ),
-        ],
-      ),
-    ),
-  );
-
-  factory _TaskItem.survey(SurveyCard survey) {
-    final count = survey.questionCount;
-    final seconds = survey.estimatedSeconds;
-    final about = [
-      if (count != null) 'There will be $count questions.',
-      if (seconds != null)
-        'It takes approximately ${Formatters.duration(seconds)} to answer '
-            'all the questions.',
-    ].join(' ');
-
-    return _TaskItem(
-      id: survey.id,
-      title: survey.title,
-      route: Routes.survey,
-      reward: survey.rewardAmount,
-      subtitle: seconds != null
-          ? Formatters.approxDuration(seconds)
-          : count == null
-          ? null
-          : '$count questions',
-      overview: TaskOverviewDialog(
-        child: TaskOverviewBody(
-          kind: EarnTaskKind.surveys,
-          title: survey.title,
-          sections: [
-            if (about.isNotEmpty)
-              OverviewSection('About this survey', text: about),
-            const OverviewSection(
-              'Before you start',
-              bullets: [
-                'Answer honestly based on your own opinion',
-                'There are no right or wrong answers',
-                'Complete the survey in one session',
-                'You cannot change your answers after submission',
-              ],
-            ),
-            const OverviewSection(
-              'Privacy',
-              text:
-                  'Your responses are anonymous and will only be used for '
-                  'research and analytics purposes',
-            ),
-            rewardSection(
-              lead: 'Complete all the questions successfully to receive',
-              amount: survey.rewardAmount,
-              tail:
-                  'The reward will be added to your wallet after successful '
-                  'submission',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  factory _TaskItem.quiz(QuizCard quiz) {
-    final count = quiz.questionCount;
-    return _TaskItem(
-      id: quiz.id,
-      title: quiz.title,
-      route: Routes.quiz,
-      reward: quiz.rewardAmount,
-      subtitle: count == null ? null : '$count questions',
-      overview: TaskOverviewDialog(
-        child: TaskOverviewBody(
-          kind: EarnTaskKind.quizzes,
-          title: quiz.title,
-          sections: [
-            const OverviewSection(
-              'Before you start',
-              bullets: [
-                'Each question has one correct answer',
-                'You can not change your answer later',
-                'Complete the quiz in one session',
-              ],
-            ),
-            rewardSection(
-              lead: 'Answer all the questions correctly to receive',
-              amount: quiz.rewardAmount,
-              tail:
-                  'The reward will be added to your wallet after verification',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  factory _TaskItem.campaign(CampaignCard campaign) {
+  static String? _campaignSubtitle(CampaignCard campaign) {
     final subtitle = [
-      if (campaign.campaignType != null) campaign.campaignType!,
+      ?campaign.contentTypeLabel,
       if (campaign.estimatedSeconds != null)
         Formatters.duration(campaign.estimatedSeconds!),
     ].join(' · ');
-
-    return _TaskItem(
-      id: campaign.id,
-      title: campaign.title,
-      route: Routes.campaign,
-      reward: campaign.rewardAmount,
-      completed: campaign.isCompleted,
-      subtitle: subtitle.isEmpty ? null : subtitle,
-      overview: CampaignOverviewDialog(card: campaign),
-    );
+    return subtitle.isEmpty ? null : subtitle;
   }
 }
 

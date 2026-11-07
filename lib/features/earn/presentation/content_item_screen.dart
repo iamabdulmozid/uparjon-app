@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/app_colors.dart';
+import '../../../core/config/app_env.dart';
 import '../../../core/constants/app_assets.dart';
+import '../../../core/error/app_exception.dart';
 import '../../../core/error/failure.dart';
 import '../../../core/ui/list_state_message.dart';
 import '../../../core/media/timed_playback.dart';
@@ -21,39 +23,52 @@ import 'widgets/answer_input.dart';
 import 'widgets/earn_popup.dart';
 import 'widgets/preparing_view.dart';
 
-/// Watch-an-ad flow (Figma V3 "Watch Ad": media → question → "Verifying" →
-/// "Congratulation!" / "Wrong Answer!"), per
-/// `docs/mobile-api-specification.md` §8.5.
+/// Runs one campaign item — ad, quiz or survey — from the Ads/Quiz/Survey
+/// lists or the campaign screen (Figma V3 "Watch Ad": media → question →
+/// "Verifying" → "Congratulation!" / "Wrong Answer!"), per
+/// `docs/API Docs V2/mobile-api-changes-2026-10-11.md`.
 ///
-/// The media cannot be skipped — the only controls are play/pause and mute.
-/// When it ends, `POST /mobile/ads/{id}/view` records the watch, and the
-/// server re-checks the duration. After that:
+/// The item comes from `GET /mobile/content/{id}`. Its media cannot be
+/// skipped — the only controls are play/pause and mute — and the view is
+/// recorded in two calls to `POST /mobile/ads/{id}/view`:
 ///
-/// * an ad without questions is done — the view itself claims the reward;
-/// * an ad with questions ([VideoAd.questions], from `GET /ads/{id}`) walks
-///   them one at a time, then submits the answers for grading. The view has
-///   to be recorded first: the server refuses answers without it.
-class WatchAdScreen extends ConsumerStatefulWidget {
-  const WatchAdScreen({super.key, required this.adId});
+/// 1. when the user first presses play, which opens the view and pays
+///    nothing. Playback waits for it, so the server's clock is running for
+///    at least as long as the media plays;
+/// 2. when the media ends. A plain ad is paid here. An item with questions
+///    comes back `awaitingAnswers`; its questions are walked one at a time
+///    and submitted once, which is what pays.
+///
+/// An item whose view already counted (`ANSWERS_PENDING`) opens straight on
+/// its questions. Standalone quizzes and surveys never come here — they have
+/// no media and their own screens.
+class ContentItemScreen extends ConsumerStatefulWidget {
+  const ContentItemScreen({super.key, required this.itemId});
 
-  final String adId;
+  final String itemId;
 
   @override
-  ConsumerState<WatchAdScreen> createState() => _WatchAdScreenState();
+  ConsumerState<ContentItemScreen> createState() => _ContentItemScreenState();
 }
 
 enum _Phase { preparing, watching, recording, question, verifying, result }
 
-class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
+class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
     with WidgetsBindingObserver {
-  VideoAd? _ad;
+  ContentDetail? _detail;
   VideoPlayback? _playback;
   _Phase _phase = _Phase.preparing;
   String? _loadError;
   VideoPlaybackState? _finalState;
 
-  /// Outcome of the view alone — set for ads without questions, or when the
-  /// server refused the view outright.
+  /// The first view call is in flight.
+  bool _starting = false;
+
+  /// The server answered the first view call — playback may run.
+  bool _viewOpen = false;
+
+  /// Outcome of the view alone — set for items without questions, or when
+  /// the server refused the view outright.
   AdView? _result;
 
   /// Outcome of the answers.
@@ -65,18 +80,22 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
 
   /// One key per request the user may retry, so a retry after a dropped
   /// connection is the same request to the server and cannot pay twice.
-  String? _viewKey;
+  String? _startKey;
+  String? _completeKey;
   String? _answersKey;
 
-  /// The view is recorded, so the questions may be answered.
+  /// The view has counted, so the questions may be answered.
   bool _questionsOpen = false;
   int _index = 0;
   final Map<String, SurveyAnswer> _answers = {};
-
-  /// Graded submissions so far, against [VideoAd.maxAttempts].
-  int _attempts = 0;
   bool _popupHidden = false;
   bool _adopting = false;
+
+  ContentItem get _item => _detail!.item;
+  List<SurveyQuestion> get _questions => _detail!.questions;
+  bool get _hasQuestions => _questions.isNotEmpty;
+
+  EarnRepository get _repo => ref.read(earnRepositoryProvider);
 
   @override
   void initState() {
@@ -98,25 +117,35 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     if (state != AppLifecycleState.resumed) unawaited(_playback?.pause());
   }
 
-  /// Takes the ad once and keeps it: the feed is invalidated after the view
-  /// is recorded, and this screen must not blank out then.
-  void _adopt(VideoAd ad) {
-    if (_ad != null) return;
-    setState(() => _ad = ad);
-    unawaited(_prepare(ad));
+  /// Takes the item once and keeps it: the lists are invalidated after the
+  /// view is recorded, and this screen must not blank out then.
+  void _adopt(ContentDetail detail) {
+    if (_detail != null) return;
+    setState(() => _detail = detail);
+    if (detail.item.progress == ContentProgress.answersPending &&
+        detail.questions.isNotEmpty) {
+      // The view already counted; showing the media again would only delay
+      // the questions.
+      setState(() {
+        _questionsOpen = true;
+        _phase = _Phase.question;
+      });
+      return;
+    }
+    unawaited(_prepare(detail.item));
   }
 
-  Future<void> _prepare(VideoAd ad) async {
-    final url = Uri.tryParse(ad.videoUrl ?? '');
-    final length = Duration(seconds: ad.duration ?? 0);
+  Future<void> _prepare(ContentItem item) async {
+    final url = Uri.tryParse(AppEnv.resolveMediaUrl(item.mediaUrl) ?? '');
+    final length = Duration(seconds: item.durationSeconds ?? 0);
     // Stills and GIFs have no clock of their own, so a timer stands in for
     // the video's — the watch rule is the same.
     final playback = url == null || !url.hasScheme
-        ? TimedPlayback(length, surface: _NoVideoSurface(title: ad.title))
-        : ad.isImage
+        ? TimedPlayback(length, surface: _NoVideoSurface(title: item.title))
+        : item.isImage
         ? TimedPlayback(
             length,
-            surface: _ImageSurface(url: url.toString(), title: ad.title),
+            surface: _ImageSurface(url: url.toString(), title: item.title),
           )
         : ref.read(videoPlaybackFactoryProvider)(url);
 
@@ -137,13 +166,12 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
   }
 
   void _reload() {
-    final ad = _ad;
-    if (ad == null) return;
+    if (_detail == null) return;
     setState(() {
       _loadError = null;
       _phase = _Phase.preparing;
     });
-    unawaited(_prepare(ad));
+    unawaited(_prepare(_item));
   }
 
   void _onPlayback() {
@@ -151,10 +179,48 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     final state = _playback!.state.value;
     if (state.completed && _phase == _Phase.watching) {
       _finalState = state;
-      unawaited(_ad!.hasQuestions ? _recordView() : _claimView());
+      unawaited(_completeView());
       return;
     }
     setState(() {});
+  }
+
+  /// The play button. The first press opens the view on the server before
+  /// any media plays.
+  void _play() {
+    if (_viewOpen) {
+      unawaited(_playback!.play());
+    } else {
+      unawaited(_startView());
+    }
+  }
+
+  Future<void> _startView() async {
+    if (_starting) return;
+    setState(() => _starting = true);
+    try {
+      final view = await _repo.startView(
+        itemId: _item.id,
+        idempotencyKey: _startKey ??= Ids.newId(),
+      );
+      if (!mounted) return;
+      setState(() => _starting = false);
+      if (!view.isStarted) {
+        // Counted already, from an earlier visit.
+        _onViewCounted(view);
+        return;
+      }
+      _viewOpen = true;
+      unawaited(_playback!.play());
+    } catch (error) {
+      if (mounted) setState(() => _starting = false);
+      _fail(error, retry: _retryStart);
+    }
+  }
+
+  void _retryStart() {
+    _enter(_Phase.watching);
+    unawaited(_startView());
   }
 
   int get _watchedSeconds {
@@ -162,75 +228,60 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
     return math.max(state.position.inSeconds, state.duration.inSeconds);
   }
 
-  Future<AdView> _postView() => ref
-      .read(earnRepositoryProvider)
-      .submitAdView(
-        adId: widget.adId,
-        watchedSeconds: _watchedSeconds,
-        idempotencyKey: _viewKey ??= Ids.newId(),
-      );
-
-  /// Ad without questions: the view is the whole task.
-  Future<void> _claimView() async {
-    _enter(_Phase.verifying);
+  /// The media ended: completes the view, which pays a plain ad and unlocks
+  /// the questions of any other item.
+  Future<void> _completeView() async {
+    _enter(_hasQuestions ? _Phase.recording : _Phase.verifying);
     try {
-      final view = await _postView();
+      final view = await _repo.completeView(
+        itemId: _item.id,
+        watchedSeconds: _watchedSeconds,
+        idempotencyKey: _completeKey ??= Ids.newId(),
+      );
       if (!mounted) return;
-      _finish(view: view);
+      _onViewCounted(view);
     } catch (error) {
-      _fail(error, retry: _claimView);
+      _fail(error, retry: _completeView);
     }
   }
 
-  /// Ad with questions: records the view, which unlocks the answers.
-  Future<void> _recordView() async {
-    _enter(_Phase.recording);
-    try {
-      final view = await _postView();
-      if (!mounted) return;
-      if (view.status == AdViewStatus.failed) {
-        // The server did not accept the watch; answering cannot help.
-        _finish(view: view);
-        return;
-      }
+  void _onViewCounted(AdView view) {
+    final counted =
+        view.awaitingAnswers || view.status == AdViewStatus.completed;
+    if (_hasQuestions && counted) {
       setState(() {
         _questionsOpen = true;
         _phase = _Phase.question;
       });
-    } catch (error) {
-      _fail(error, retry: _recordView);
+    } else {
+      _finish(view: view);
     }
   }
 
   Future<void> _submitAnswers() async {
-    final ad = _ad!;
     _enter(_Phase.verifying);
     try {
-      final assessment = await ref
-          .read(earnRepositoryProvider)
-          .submitAdAnswers(
-            ad: ad,
-            answers: [
-              for (final question in ad.questions)
-                if (_answers[question.id]?.hasValue ?? false)
-                  _answers[question.id]!,
-            ],
-            idempotencyKey: _answersKey ??= Ids.newId(),
-          );
+      final assessment = await _repo.submitAnswers(
+        item: _item,
+        // The server wants exactly one answer per question; Next stays
+        // disabled until each has one.
+        answers: [for (final question in _questions) _answers[question.id]!],
+        idempotencyKey: _answersKey ??= Ids.newId(),
+      );
       if (!mounted) return;
-      _attempts++;
       _finish(assessment: assessment);
     } catch (error) {
       _fail(error, retry: _submitAnswers);
     }
   }
 
-  /// Starts the answers over after a failed grade, as a new attempt.
-  void _answerAgain() => setState(() {
-    _answers.clear();
+  /// Back to the questions after the server refused an answer, with the
+  /// answers kept so only the wrong one needs changing.
+  void _reviewAnswers() => setState(() {
     _index = 0;
     _answersKey = null;
-    _assessment = null;
+    _failure = null;
+    _retry = null;
     _phase = _Phase.question;
   });
 
@@ -248,26 +299,28 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
       _phase = _Phase.result;
       _popupHidden = false;
     });
-    // The ad (or this attempt at it) is spent — refresh the feeds behind.
+    // The item is spent — refresh the lists behind.
     invalidateEarnFeeds(ref);
   }
 
   void _fail(Object error, {required VoidCallback retry}) {
     if (!mounted) return;
+    final failure = Failure.from(error);
+    if (failure is BusinessFailure && failure.retryable) {
+      // The server rolled the refused request back; replaying its key would
+      // only replay the refusal.
+      _completeKey = null;
+    }
     setState(() {
-      _failure = Failure.from(error);
+      _failure = failure;
       _retry = retry;
       _phase = _Phase.result;
       _popupHidden = false;
     });
+    // Done already, the campaign closed, the user fell out of its audience:
+    // the lists behind are out of date.
+    if (failure is BusinessFailure) invalidateEarnFeeds(ref);
   }
-
-  bool get _attemptsLeft => _attempts < (_ad?.maxAttempts ?? 1);
-
-  /// Quiz questions must all be answered — a blank is a wrong answer anyway.
-  /// Survey questions follow their own `isRequired`.
-  bool _mustAnswer(SurveyQuestion question) =>
-      !_ad!.isSurvey || question.isRequired;
 
   void _back() {
     if (_index > 0) {
@@ -278,7 +331,7 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
   }
 
   void _next() {
-    if (_index < _ad!.questions.length - 1) {
+    if (_index < _questions.length - 1) {
       setState(() => _index++);
     } else {
       unawaited(_submitAnswers());
@@ -287,8 +340,8 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
 
   @override
   Widget build(BuildContext context) {
-    final ad = _ad;
-    if (ad == null) return _buildGate(context);
+    if (_detail == null) return _buildGate(context);
+    final item = _item;
 
     final loadError = _loadError;
     final preparing = _phase == _Phase.preparing;
@@ -308,31 +361,34 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
       );
     } else if (_questionsOpen) {
       // Stays behind the Verifying/result popups once submitted.
-      final question = ad.questions[_index];
+      final question = _questions[_index];
       body = _AdQuestionBody(
-        // A new attempt starts every input over, text boxes included.
-        key: ValueKey('${question.id}#$_attempts'),
+        key: ValueKey(question.id),
         question: question,
         index: _index,
-        total: ad.questions.length,
+        total: _questions.length,
         answer: _answers[question.id],
         enabled: _phase == _Phase.question,
-        canContinue:
-            !_mustAnswer(question) ||
-            (_answers[question.id]?.hasValue ?? false),
+        canContinue: _answers[question.id]?.hasValue ?? false,
         onChanged: (answer) => setState(() => _answers[question.id] = answer),
         onBack: _back,
         onNext: _next,
       );
     } else {
-      body = _WatchBody(playback: _playback!, ad: ad);
+      body = _WatchBody(
+        playback: _playback!,
+        item: item,
+        questionCount: _questions.length,
+        starting: _starting,
+        onPlay: _play,
+      );
     }
 
     return Scaffold(
       backgroundColor: AppColors.creamLight,
       appBar: (preparing && loadError == null) || _phase == _Phase.recording
           ? null
-          : _appBar(context),
+          : _appBar(context, item.kind),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -341,7 +397,7 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
             EarnPopup(
               illustration: AppAssets.illustrationVerifying,
               title: 'Verifying',
-              message: switch (ad.questions.length) {
+              message: switch (_questions.length) {
                 0 => 'Please wait while we verify your view',
                 1 => 'Please wait while we verify your answer',
                 _ => 'Please wait while we verify your answers',
@@ -349,152 +405,177 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
               onClose: () => setState(() => _popupHidden = true),
             ),
           if (_phase == _Phase.result && !_popupHidden)
-            _resultPopup(context, ad),
+            _resultPopup(context, item),
         ],
       ),
     );
   }
 
-  /// Loads the ad; shown until [_adopt] has run.
-  ///
-  /// `GET /ads/{id}` carries the questions. If it fails — it sits under
-  /// "Ad Management" and may be closed to earners — the feed card still
-  /// plays the ad, just without questions, as before the endpoint existed.
+  /// Loads the item; shown until [_adopt] has run.
   Widget _buildGate(BuildContext context) {
-    final details = ref.watch(adDetailsProvider(widget.adId));
-    final feed = ref.watch(adsFeedProvider);
-    final card = feed.value
-        ?.where((candidate) => candidate.adId == widget.adId)
-        .firstOrNull;
+    final async = ref.watch(contentDetailProvider(widget.itemId));
+    final detail = async.value;
+    final item = detail?.item;
 
-    final VideoAd? found = details.hasValue
-        ? details.requireValue.withFallback(card)
-        : details.hasError
-        ? card
-        : null;
-    // The feed marks what this user already claimed; playing it again could
-    // only end in `ALREADY_CLAIMED`. Only the feed knows — the ad details
-    // are not per user.
-    final claimed = card?.isCompleted ?? false;
-    final available = found != null && found.isActive && !claimed;
-    if (available && !_adopting) {
-      _adopting = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _adopt(found);
-      });
-    }
-
-    const loading = PreparingView(
-      title: 'Loading Advertisement',
-      subtitle: 'Please wait a moment',
-    );
-    final Widget body;
-    var showAppBar = true;
-    if (claimed) {
-      body = const ListStateMessage(
-        message: 'You have already claimed your reward for this ad.',
-      );
-    } else if (available || !details.hasValue && !details.hasError) {
-      body = loading;
-      showAppBar = false;
-    } else if (found != null || details.hasValue || feed.hasValue) {
-      // Off sale, or neither source knows it any more.
-      body = const ListStateMessage(message: 'This ad is no longer available.');
-    } else if (feed.hasError) {
-      final error = feed.error;
+    final Widget? body;
+    if (item != null && item.canStart) {
+      if (!_adopting) {
+        _adopting = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _adopt(detail!);
+        });
+      }
+      body = null;
+    } else if (item != null) {
       body = ListStateMessage(
-        message: error is Failure ? error.message : 'Could not load this ad.',
-        onRetry: () {
-          ref.invalidate(adDetailsProvider(widget.adId));
-          ref.invalidate(adsFeedProvider);
-        },
+        message: item.isCompleted
+            ? 'You have already completed this one.'
+            : item.unavailableMessage ?? 'This is not available right now.',
+      );
+    } else if (async.hasError) {
+      final failure = Failure.from(async.error!);
+      final gone = failure.code == ApiErrorCodes.notFound;
+      body = ListStateMessage(
+        message: gone ? 'This is no longer available.' : failure.message,
+        onRetry: gone
+            ? null
+            : () => ref.invalidate(contentDetailProvider(widget.itemId)),
       );
     } else {
-      body = loading;
-      showAppBar = false;
+      body = null;
     }
 
     return Scaffold(
       backgroundColor: AppColors.creamLight,
-      appBar: showAppBar ? _appBar(context) : null,
-      body: body,
+      appBar: body == null ? null : _appBar(context, item?.kind),
+      body:
+          body ??
+          const PreparingView(
+            title: 'Loading Advertisement',
+            subtitle: 'Please wait a moment',
+          ),
     );
   }
 
-  PreferredSizeWidget _appBar(BuildContext context) => AppBar(
-    backgroundColor: AppColors.creamLight,
-    surfaceTintColor: Colors.transparent,
-    centerTitle: true,
-    title: const Text(
-      'Watch Ad',
-      style: TextStyle(fontSize: 18, color: AppColors.ink),
-    ),
-    leading: IconButton(
-      icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-      color: AppColors.ink,
-      onPressed: () => context.pop(),
-    ),
-  );
-
-  Widget _resultPopup(BuildContext context, VideoAd ad) {
-    final failure = _failure;
-    if (failure != null) {
-      // Transport problems are worth another go: the request keeps its
-      // idempotency key, so the retry is safe. A domain refusal is final.
-      final retryable = failure is NetworkFailure || failure is ServerFailure;
-      return EarnPopup(
-        illustration: AppAssets.illustrationNotRewarded,
-        title: 'Could not verify',
-        message: failure.message,
-        actionLabel: retryable ? 'Try again' : 'Continue',
-        onAction: retryable ? _retry : () => context.pop(),
-        onClose: () => context.pop(),
+  PreferredSizeWidget _appBar(BuildContext context, ContentKind? kind) =>
+      AppBar(
+        backgroundColor: AppColors.creamLight,
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        title: Text(switch (kind) {
+          ContentKind.quiz => 'Quiz',
+          ContentKind.survey => 'Survey',
+          _ => 'Watch Ad',
+        }, style: const TextStyle(fontSize: 18, color: AppColors.ink)),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+          color: AppColors.ink,
+          onPressed: () => context.pop(),
+        ),
       );
-    }
+
+  Widget _resultPopup(BuildContext context, ContentItem item) {
+    final failure = _failure;
+    if (failure != null) return _failurePopup(context, failure);
 
     final assessment = _assessment;
-    if (assessment != null) return _assessmentPopup(context, ad, assessment);
+    if (assessment != null) return _assessmentPopup(context, item, assessment);
 
-    final rewarded = _result?.isRewarded ?? false;
+    final view = _result;
+    final rewarded = view?.isRewarded ?? false;
+    final paid = view?.rewardEarned;
     return EarnPopup(
       illustration: rewarded
           ? AppAssets.illustrationCongratulations
           : AppAssets.illustrationNotRewarded,
       title: rewarded ? 'Congratulation!' : 'Not rewarded',
-      message: rewarded
-          ? 'You watched the full ad. Your reward will be added to your '
-                'wallet after verification.'
-          : "This view didn't qualify for a reward this time.",
+      message: !rewarded
+          ? "This view didn't qualify for a reward this time."
+          : paid != null && paid > 0
+          ? 'You watched the full ad. ${Formatters.taka(paid)} has been '
+                'added to your wallet.'
+          : 'You watched the full ad. Your reward will be added to your '
+                'wallet.',
       actionLabel: 'Continue',
       onAction: () => context.pop(),
       onClose: () => context.pop(),
     );
   }
 
+  Widget _failurePopup(BuildContext context, Failure failure) {
+    if (failure.code == ApiErrorCodes.invalidAnswer) {
+      return EarnPopup(
+        illustration: AppAssets.illustrationAlert,
+        title: 'Check your answers',
+        message: failure.message,
+        actionLabel: 'Review answers',
+        onAction: _reviewAnswers,
+        onClose: _reviewAnswers,
+      );
+    }
+
+    // Transport problems are worth another go: the request keeps its
+    // idempotency key, so the retry is safe. So is a view completed a little
+    // too soon. Any other domain refusal is final.
+    final retryable =
+        failure is NetworkFailure ||
+        failure is ServerFailure ||
+        (failure is BusinessFailure && failure.retryable);
+    return EarnPopup(
+      illustration: AppAssets.illustrationNotRewarded,
+      title: 'Could not verify',
+      message: failure.message,
+      actionLabel: retryable ? 'Try again' : 'Continue',
+      onAction: retryable ? _retry : () => context.pop(),
+      onClose: () => context.pop(),
+    );
+  }
+
   Widget _assessmentPopup(
     BuildContext context,
-    VideoAd ad,
+    ContentItem item,
     AdAssessment assessment,
   ) {
-    final yourAnswer = ad.questions.length == 1
+    final yourAnswer = _questions.length == 1
         ? 'Your answer is'
         : 'Your answers are';
+    final cashback = _cashbackLine(assessment);
+    final paid = assessment.rewardEarned;
 
-    if (assessment.passed) {
+    // Only cashback came of it: nothing is in the wallet yet, so it must not
+    // read as earned.
+    if (!assessment.earned && cashback != null) {
       return EarnPopup(
-        illustration: AppAssets.illustrationCongratulations,
-        title: 'Congratulation!',
-        message: ad.isSurvey
-            ? 'Thanks for your feedback. Your reward will be added to your '
-                  'wallet'
-            : '$yourAnswer correct. Your reward will be added to your wallet',
+        illustration: AppAssets.illustrationSuccess,
+        title: 'Cashback reserved',
+        message: cashback,
         actionLabel: 'Continue',
         onAction: () => context.pop(),
         onClose: () => context.pop(),
       );
     }
 
-    if (ad.isSurvey) {
+    // A server that leaves out `rewardEarned` has still paid a pass.
+    if (assessment.earned || (assessment.passed && paid == null)) {
+      final lead = item.isSurvey
+          ? 'Thanks for your feedback.'
+          : assessment.passed
+          ? '$yourAnswer correct.'
+          : null;
+      final reward = assessment.earned
+          ? '${Formatters.taka(paid!)} has been added to your wallet.'
+          : 'Your reward will be added to your wallet.';
+      return EarnPopup(
+        illustration: AppAssets.illustrationCongratulations,
+        title: 'Congratulation!',
+        message: [?lead, reward, ?cashback].join(' '),
+        actionLabel: 'Continue',
+        onAction: () => context.pop(),
+        onClose: () => context.pop(),
+      );
+    }
+
+    if (item.isSurvey) {
       return EarnPopup(
         illustration: AppAssets.illustrationNotRewarded,
         title: 'Not rewarded',
@@ -507,41 +588,62 @@ class _WatchAdScreenState extends ConsumerState<WatchAdScreen>
       );
     }
 
-    final again = _attemptsLeft;
+    // One submission per item: a failed quiz is done for good.
     return EarnPopup(
       illustration: AppAssets.illustrationNotRewarded,
       title: 'Wrong Answer!',
-      message: again
-          ? '$yourAnswer not correct. Watch closely and try again.'
-          : '$yourAnswer not correct. You didn’t earn the reward this time.',
-      actionLabel: again ? 'Try again' : 'Continue',
-      onAction: again ? _answerAgain : () => context.pop(),
-      secondaryLabel: again ? 'Exit' : null,
-      onSecondary: again ? () => context.pop() : null,
+      message: '$yourAnswer not correct. You didn’t earn the reward this time.',
+      actionLabel: 'Continue',
+      onAction: () => context.pop(),
       onClose: () => context.pop(),
     );
+  }
+
+  /// "Buy the product by … to get ৳X cashback." — promised, paid only after
+  /// the purchase is delivered and its return window has passed.
+  static String? _cashbackLine(AdAssessment assessment) {
+    if (!assessment.hasCashback) return null;
+    final amount = Formatters.taka(assessment.cashbackPromised!);
+    final deadlines = [
+      for (final promise in assessment.cashback) ?promise.purchaseDeadline,
+    ]..sort();
+    final by = deadlines.isEmpty
+        ? 'in time'
+        : 'by ${Formatters.activityTime(deadlines.first)}';
+    return 'Buy the product from the store $by to get $amount cashback.';
   }
 }
 
 class _WatchBody extends StatelessWidget {
-  const _WatchBody({required this.playback, required this.ad});
+  const _WatchBody({
+    required this.playback,
+    required this.item,
+    required this.questionCount,
+    required this.starting,
+    required this.onPlay,
+  });
 
   final VideoPlayback playback;
-  final VideoAd ad;
+  final ContentItem item;
+  final int questionCount;
+  final bool starting;
+  final VoidCallback onPlay;
+
+  String get _media => item.isImage ? 'image' : 'video';
 
   String get _hint {
-    if (!ad.hasQuestions) {
-      return 'Watch the full video without skipping. Your reward is '
+    if (questionCount == 0) {
+      return 'Watch the full $_media without skipping. Your reward is '
           'verified as soon as it ends.';
     }
-    if (ad.isSurvey) {
-      return 'After the video, a few questions will appear. Answer them to '
+    if (item.isSurvey) {
+      return 'After the $_media, a few questions will appear. Answer them to '
           'earn the reward.';
     }
-    return ad.questions.length == 1
-        ? 'After the video, a question will appear. To earn the reward you '
+    return questionCount == 1
+        ? 'After the $_media, a question will appear. To earn the reward you '
               'need to answer the question correctly.'
-        : 'After the video, ${ad.questions.length} questions will appear. To '
+        : 'After the $_media, $questionCount questions will appear. To '
               'earn the reward you need to answer them correctly.';
   }
 
@@ -551,7 +653,7 @@ class _WatchBody extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       child: Column(
         children: [
-          _Player(playback: playback),
+          _Player(playback: playback, starting: starting, onPlay: onPlay),
           const SizedBox(height: 16),
           const Text(
             'Watch till the end',
@@ -578,10 +680,11 @@ class _WatchBody extends StatelessWidget {
   }
 }
 
-/// One post-video question (Figma V3 "Watch Ad" question step): the
-/// question, a divider, the answers, then Back and Next/Submit.
+/// One post-media question (Figma V3 "Watch Ad" question step): the
+/// question, a divider, the answers, then Back and Next/Submit. Every
+/// question must be answered, so Next waits for an answer.
 ///
-/// Back steps to the previous question, or leaves the ad from the first —
+/// Back steps to the previous question, or leaves the item from the first —
 /// without claiming the reward.
 class _AdQuestionBody extends StatelessWidget {
   const _AdQuestionBody({
@@ -610,6 +713,9 @@ class _AdQuestionBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLast = index == total - 1;
+    final image = question.hasImage
+        ? AppEnv.resolveMediaUrl(question.mediaUrl)
+        : null;
     return Column(
       children: [
         Expanded(
@@ -631,6 +737,17 @@ class _AdQuestionBody extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                 ],
+                if (image != null) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(
+                      image,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 Text(
                   question.text,
                   style: const TextStyle(
@@ -640,6 +757,10 @@ class _AdQuestionBody extends StatelessWidget {
                     color: AppColors.ink,
                   ),
                 ),
+                if (question.isCashback) ...[
+                  const SizedBox(height: 12),
+                  _CashbackNote(question: question),
+                ],
                 const SizedBox(height: 16),
                 const Divider(height: 1, color: AppColors.border),
                 const SizedBox(height: 16),
@@ -684,6 +805,56 @@ class _AdQuestionBody extends StatelessWidget {
   }
 }
 
+/// A purchase-cashback question: answering reserves cashback that is paid
+/// only once the user buys the product from the platform store.
+class _CashbackNote extends StatelessWidget {
+  const _CashbackNote({required this.question});
+
+  final SurveyQuestion question;
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = question.rewardAmount;
+    final days = question.purchaseWindowDays;
+    final within = days == null
+        ? ''
+        : ' within $days ${days == 1 ? 'day' : 'days'}';
+    final reward = amount == null
+        ? 'cashback'
+        : '${Formatters.taka(amount)} cashback';
+    final link = question.productUrl;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.greenTint,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Buy this product from the store$within to get $reward.',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.4,
+              color: AppColors.greenDeep,
+            ),
+          ),
+          if (link != null && link.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            SelectableText(
+              link,
+              style: const TextStyle(fontSize: 12, color: AppColors.slate),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 /// An image or GIF creative. A broken link falls back to the no-media
 /// frame rather than an error: the timer still counts the watch.
 class _ImageSurface extends StatelessWidget {
@@ -705,10 +876,19 @@ class _ImageSurface extends StatelessWidget {
 /// The player surface with the design's controls: a centre play/pause
 /// button, the clock, and mute. Deliberately no seek bar — skipping ahead
 /// would forfeit the reward anyway.
+///
+/// Play goes through [onPlay], which opens the view on the server first; a
+/// spinner stands in for the button while [starting].
 class _Player extends StatelessWidget {
-  const _Player({required this.playback});
+  const _Player({
+    required this.playback,
+    required this.starting,
+    required this.onPlay,
+  });
 
   final VideoPlayback playback;
+  final bool starting;
+  final VoidCallback onPlay;
 
   @override
   Widget build(BuildContext context) {
@@ -731,13 +911,15 @@ class _Player extends StatelessWidget {
                   onTap: () {
                     if (state.playing) {
                       playback.pause();
-                    } else {
-                      playback.play();
+                    } else if (!starting) {
+                      onPlay();
                     }
                   },
                   child: Center(
                     child: state.playing
                         ? const SizedBox.shrink()
+                        : starting
+                        ? const CircularProgressIndicator(color: Colors.white)
                         : _PlayButton(completed: state.completed),
                   ),
                 ),
@@ -806,7 +988,7 @@ class _PlayButton extends StatelessWidget {
   }
 }
 
-/// Stand-in frames for an ad that arrived without a video URL.
+/// Stand-in frames for an item that arrived without media.
 class _NoVideoSurface extends StatelessWidget {
   const _NoVideoSurface({required this.title});
 

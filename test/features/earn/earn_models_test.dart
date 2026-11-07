@@ -1,52 +1,113 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uparjon/features/earn/data/earn_models.dart';
 
-/// Parsing of `AdResponse` (`GET /ads/{id}`) and the answer-submission
-/// replies, whose shapes the OpenAPI leaves untyped.
-void main() {
-  group('VideoAd from AdResponse', () {
-    Map<String, dynamic> question(String id, {int? order}) => {
-      'id': id,
-      'questionText': 'Question $id',
-      'questionType': 'SINGLE_CHOICE',
-      'orderIndex': ?order,
-      'options': [
-        {'id': '$id-a', 'optionText': 'A', 'correct': true},
-      ],
-    };
+import '../../support/earn_fixtures.dart';
 
-    test('reads the detail fields and orders questions by orderIndex', () {
-      final ad = VideoAd.fromJson({
-        'id': 'ad-1',
-        'title': 'Aarong Dairy Promo',
-        'adType': 'QUIZ',
-        'status': 'ACTIVE',
-        'mediaUrl': 'https://cdn.test/aarong.mp4',
-        'durationSeconds': 15,
-        'rewardAmount': 10.0,
-        'passingScore': 100,
-        'maxAttempts': 3,
-        'questions': [question('b', order: 2), question('a', order: 1)],
+/// Parsing of the content DTOs (`docs/API Docs V2/`) and the un-enveloped
+/// view and submit replies, whose shapes the OpenAPI leaves untyped.
+void main() {
+  Map<String, dynamic> question(String id, {int? order}) => {
+    'id': id,
+    'questionText': 'Question $id',
+    'questionType': 'SINGLE_CHOICE',
+    'orderIndex': ?order,
+    'options': [
+      {'id': '$id-a', 'optionText': 'A'},
+    ],
+  };
+
+  group('ContentItem', () {
+    test('reads the item fields', () {
+      final item = ContentItem.fromJson({
+        ...contentItem(kind: 'QUIZ', questionCount: 2, passingScore: 80),
+        'campaignEndAt': '2026-10-31T23:59:00',
       });
 
-      expect(ad.adId, 'ad-1');
-      expect(ad.videoUrl, 'https://cdn.test/aarong.mp4');
-      expect(ad.duration, 15);
-      expect(ad.adType, AdType.quiz);
-      expect(ad.isSurvey, isFalse);
-      expect(ad.isActive, isTrue);
-      expect(ad.maxAttempts, 3);
-      expect(ad.questions.map((q) => q.id), ['a', 'b']);
+      expect(item.id, 'ad-1');
+      expect(item.kind, ContentKind.quiz);
+      expect(item.source, ContentSource.campaign);
+      expect(item.mediaType, MediaType.video);
+      expect(item.durationSeconds, 3);
+      expect(item.questionCount, 2);
+      expect(item.passingScore, 80);
+      expect(item.hasQuestions, isTrue);
+      expect(item.campaignId, 'c-1');
+      // Zone-less server times are UTC.
+      expect(item.campaignEndAt, DateTime.utc(2026, 10, 31, 23, 59).toLocal());
+    });
+
+    test('a null end date means the campaign never ends', () {
+      expect(ContentItem.fromJson(contentItem()).campaignEndAt, isNull);
+    });
+
+    test('standalone items have no campaign', () {
+      final item = ContentItem.fromJson(
+        contentItem(kind: 'SURVEY', source: 'STANDALONE'),
+      );
+      expect(item.isStandalone, isTrue);
+      expect(item.isSurvey, isTrue);
+      expect(item.campaignId, isNull);
+    });
+
+    test('progress decides whether it can start', () {
+      ContentItem parse({String progress = 'NOT_STARTED', bool ok = true}) =>
+          ContentItem.fromJson(contentItem(progress: progress, available: ok));
+
+      expect(parse().canStart, isTrue);
+      expect(parse(ok: false).canStart, isFalse);
+      expect(parse(progress: 'COMPLETED', ok: false).isCompleted, isTrue);
+      expect(parse(progress: 'COMPLETED').canStart, isFalse);
+      // Viewed already: the answers may still be sent.
+      expect(parse(progress: 'ANSWERS_PENDING', ok: false).canStart, isTrue);
+    });
+
+    test('recognises image media by type or by extension', () {
+      ContentItem media(String? type, String? url) =>
+          ContentItem.fromJson(contentItem(mediaType: type, mediaUrl: url));
+      expect(media('IMAGE', 'https://cdn.test/a.mp4').isImage, isTrue);
+      expect(media('GIF', null).isImage, isTrue);
+      expect(media(null, 'https://cdn.test/promo.GIF?v=2').isImage, isTrue);
+      expect(media(null, 'https://cdn.test/a.m3u8').isImage, isFalse);
+      // A declared video is a video, whatever the link looks like.
+      expect(media('VIDEO', 'https://cdn.test/a.png').isImage, isFalse);
+    });
+  });
+
+  group('ContentDetail', () {
+    test('orders questions by orderIndex', () {
+      final detail = ContentDetail.fromJson({
+        'item': contentItem(kind: 'QUIZ'),
+        'questions': [question('b', order: 2), question('a', order: 1)],
+      });
+      expect(detail.item.kind, ContentKind.quiz);
+      expect(detail.questions.map((q) => q.id), ['a', 'b']);
     });
 
     test('questions without orderIndex keep their arrival order', () {
-      final ad = VideoAd.fromJson({
-        'id': 'ad-1',
+      final detail = ContentDetail.fromJson({
+        'item': contentItem(),
         'questions': [
           for (final id in ['c', 'a', 'b', 'd']) question(id),
         ],
       });
-      expect(ad.questions.map((q) => q.id), ['c', 'a', 'b', 'd']);
+      expect(detail.questions.map((q) => q.id), ['c', 'a', 'b', 'd']);
+    });
+
+    test('reads the cashback and media fields of a question', () {
+      final q = SurveyQuestion.fromJson({
+        ...question('q'),
+        'rewardMode': 'PURCHASE_CASHBACK',
+        'rewardAmount': 50,
+        'productUrl': 'https://store.test/p',
+        'purchaseWindowDays': 7,
+        'mediaType': 'IMAGE',
+        'mediaUrl': '/api/v1/files/download/x.png',
+      });
+      expect(q.isCashback, isTrue);
+      expect(q.rewardAmount, 50);
+      expect(q.purchaseWindowDays, 7);
+      expect(q.hasImage, isTrue);
+      expect(SurveyQuestion.fromJson(question('p')).isCashback, isFalse);
     });
 
     test('reads isRequired, which surveys call required', () {
@@ -55,74 +116,66 @@ void main() {
       expect(required.isRequired, isTrue);
       expect(legacy.isRequired, isTrue);
     });
+  });
 
-    test('a feed card is a plain video ad with no questions', () {
-      final card = VideoAd.fromJson({
-        'adId': 'ad-1',
-        'title': 'Regal',
-        'videoUrl': 'https://cdn.test/regal.mp4',
-        'duration': 30,
-        'reward': 5,
+  group('CampaignContent', () {
+    test('groups the items and counts progress', () {
+      final campaign = CampaignContent.fromJson({
+        'id': 'c-1',
+        'title': 'Kitchen week',
+        'endAt': null,
+        'totalItems': 3,
+        'completedItems': 1,
+        'ads': [contentItem()],
+        'quizzes': [contentItem(id: 'q', kind: 'QUIZ')],
+        'surveys': [],
       });
-      expect(card.adType, AdType.video);
-      expect(card.hasQuestions, isFalse);
-      expect(card.isImage, isFalse);
-      expect(card.isActive, isTrue);
+      expect(campaign.ads.single.kind, ContentKind.ad);
+      expect(campaign.quizzes.single.kind, ContentKind.quiz);
+      expect(campaign.surveys, isEmpty);
+      expect(campaign.completedItems, 1);
+      expect(campaign.totalItems, 3);
+      expect(campaign.endAt, isNull);
+      expect(campaign.isEmpty, isFalse);
+    });
+  });
+
+  group('AdView', () {
+    test('the first call only starts the view', () {
+      final view = AdView.fromJson({'status': 'STARTED'});
+      expect(view.isStarted, isTrue);
+      expect(view.isRewarded, isFalse);
     });
 
-    test('recognises image creatives by type or by extension', () {
-      expect(VideoAd.fromJson({'id': 'x', 'adType': 'IMAGE'}).isImage, isTrue);
+    test('an item with questions waits for its answers', () {
+      final view = AdView.fromJson({
+        'status': 'COMPLETED',
+        'awaitingAnswers': true,
+        'rewardEarned': 0,
+        // Set on views that pay nothing; never read.
+        'rewardEligible': true,
+      });
+      expect(view.awaitingAnswers, isTrue);
+      expect(view.isRewarded, isFalse);
+    });
+
+    test('a view that earned money is a reward', () {
+      expect(AdView.fromJson({'status': 'REWARDED'}).isRewarded, isTrue);
       expect(
-        VideoAd.fromJson({
-          'id': 'x',
-          'mediaUrl': 'https://cdn.test/promo.GIF?v=2',
-        }).isImage,
+        AdView.fromJson({'status': 'COMPLETED', 'rewardEarned': 15}).isRewarded,
         isTrue,
       );
-      expect(
-        VideoAd.fromJson({'id': 'x', 'mediaUrl': 'https://cdn.test/a.m3u8'})
-            .isImage,
-        isFalse,
-      );
-    });
-
-    test('details borrow what they lack from the feed card', () {
-      final details = VideoAd.fromJson({
-        'id': 'ad-1',
-        'adType': 'SURVEY',
-        'questions': [question('a')],
-      });
-      final card = VideoAd.fromJson({
-        'adId': 'ad-1',
-        'title': 'Regal',
-        'videoUrl': 'https://cdn.test/regal.mp4',
-        'duration': 30,
-      });
-
-      final merged = details.withFallback(card);
-      expect(merged.title, 'Regal');
-      expect(merged.videoUrl, 'https://cdn.test/regal.mp4');
-      expect(merged.duration, 30);
-      expect(merged.isSurvey, isTrue);
-      expect(merged.questions, hasLength(1));
-    });
-
-    test('an ad off sale is not active', () {
-      expect(VideoAd.fromJson({'id': 'x', 'status': 'PAUSED'}).isActive, false);
     });
   });
 
   group('AdAssessment', () {
     test('a quiz reply without passed is a fail', () {
-      final result = AdAssessment.fromJson(const {});
-      expect(result.passed, isFalse);
-      expect(result.rewardTriggered, isFalse);
+      expect(AdAssessment.fromJson(const {}).passed, isFalse);
     });
 
     test('a survey reply without passed is accepted feedback', () {
       final result = AdAssessment.fromJson(const {}, passedByDefault: true);
       expect(result.passed, isTrue);
-      expect(result.rewardTriggered, isTrue);
     });
 
     test('reads the graded fields', () {
@@ -130,54 +183,43 @@ void main() {
         'passed': true,
         'score': 2,
         'totalQuestions': 2,
+        'rewardEarned': 4,
+        'participationReference': 'CP-1',
+        // A points figure that never matched the wallet credit.
         'pointsEarned': 20,
-        'rewardTriggered': true,
       });
       expect(result.score, 2);
       expect(result.totalQuestions, 2);
-      expect(result.pointsEarned, 20);
+      expect(result.rewardEarned, 4);
+      expect(result.earned, isTrue);
+      expect(result.participationReference, 'CP-1');
+    });
+
+    test('cashback is promised, not earned', () {
+      final result = AdAssessment.fromJson(const {
+        'passed': true,
+        'rewardEarned': 0,
+        'cashbackPromised': 50,
+        'cashback': [
+          {
+            'cashbackId': 'cb-1',
+            'amount': 50,
+            'status': 'AWAITING_PURCHASE',
+            'purchaseDeadline': '2026-11-08T23:59:00',
+          },
+        ],
+      });
+      expect(result.earned, isFalse);
+      expect(result.hasCashback, isTrue);
+      expect(result.cashback.single.amount, 50);
+      expect(
+        result.cashback.single.purchaseDeadline,
+        DateTime.utc(2026, 11, 8, 23, 59).toLocal(),
+      );
     });
   });
-  // Spec field names next to the deployed DTO names, 2026-09-28.
-  group('spec vs deployed field names', () {
-    test('a claimed feed item is completed, by either flag', () {
-      expect(
-        VideoAd.fromJson({'adId': 'a', 'viewed': true}).isCompleted,
-        isTrue,
-      );
-      expect(
-        VideoAd.fromJson({'adId': 'a', 'status': 'completed'}).isCompleted,
-        isTrue,
-      );
-      expect(
-        VideoAd.fromJson({'adId': 'a', 'viewed': false, 'status': 'ACTIVE'})
-            .isCompleted,
-        isFalse,
-      );
-    });
 
-    test('the claim survives merging with the ad details', () {
-      final card = VideoAd.fromJson({'adId': 'a', 'viewed': true});
-      final details = VideoAd.fromJson({'id': 'a', 'status': 'ACTIVE'});
-      expect(details.withFallback(card).viewed, isTrue);
-    });
-
-    test('a view that earned money is a reward, whatever its status', () {
-      expect(
-        AdView.fromJson({'status': 'COMPLETED', 'rewardEarned': 15}).isRewarded,
-        isTrue,
-      );
-      expect(
-        AdView.fromJson({'status': 'COMPLETED', 'rewardEligible': true})
-            .isRewarded,
-        isTrue,
-      );
-      expect(
-        AdView.fromJson({'status': 'COMPLETED', 'rewardEarned': 0}).isRewarded,
-        isFalse,
-      );
-    });
-
+  group('cards', () {
     test('campaign completion', () {
       expect(
         CampaignCard.fromJson({'id': 'c', 'status': 'COMPLETED'}).isCompleted,
@@ -189,15 +231,7 @@ void main() {
       );
     });
 
-    test('quiz card and result read either name', () {
-      expect(
-        QuizCard.fromJson({'id': 'q', 'totalQuestions': 3}).questionCount,
-        3,
-      );
-      expect(
-        QuizCard.fromJson({'id': 'q', 'questionCount': 4}).questionCount,
-        4,
-      );
+    test('a standalone quiz result reads either reward name', () {
       expect(
         QuizResult.fromJson({'passed': true, 'rewardAmount': 15}).reward,
         15,

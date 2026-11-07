@@ -7,25 +7,28 @@ import '../data/earn_models.dart';
 import '../data/earn_repository.dart';
 import 'earn_task_kind.dart';
 
-/// Watchable video ads (`GET /mobile/ads/feed`).
-final adsFeedProvider = FutureProvider.autoDispose<List<VideoAd>>(
-  (ref) => ref.watch(earnRepositoryProvider).adsFeed(),
-);
+/// The Ads, Quiz or Survey list (`GET /mobile/content/{ads,quizzes,surveys}`).
+/// Campaigns have their own cards — see [campaignsProvider].
+final contentListProvider = FutureProvider.autoDispose
+    .family<Paged<ContentItem>, EarnTaskKind>((ref, kind) {
+      final repo = ref.watch(earnRepositoryProvider);
+      return switch (kind) {
+        EarnTaskKind.ads => repo.contentAds(),
+        EarnTaskKind.quizzes => repo.contentQuizzes(),
+        EarnTaskKind.surveys => repo.contentSurveys(),
+        EarnTaskKind.campaigns => throw ArgumentError.value(
+          kind,
+          'kind',
+          'Campaigns are listed by campaignsProvider',
+        ),
+      };
+    });
 
-/// One ad with its questions (`GET /ads/{id}`).
-final adDetailsProvider = FutureProvider.autoDispose.family<VideoAd, String>(
-  (ref, id) => ref.watch(earnRepositoryProvider).ad(id),
-);
-
-/// Available quizzes (`GET /mobile/quizzes`).
-final quizzesProvider = FutureProvider.autoDispose<List<QuizCard>>(
-  (ref) => ref.watch(earnRepositoryProvider).quizzes(),
-);
-
-/// Available surveys (`GET /mobile/surveys`).
-final surveysProvider = FutureProvider.autoDispose<List<SurveyCard>>(
-  (ref) => ref.watch(earnRepositoryProvider).surveys(),
-);
+/// One campaign item with its questions (`GET /mobile/content/{id}`).
+final contentDetailProvider = FutureProvider.autoDispose
+    .family<ContentDetail, String>(
+      (ref, id) => ref.watch(earnRepositoryProvider).contentItem(id),
+    );
 
 /// First page of campaigns (`GET /mobile/campaigns`).
 final campaignsProvider = FutureProvider.autoDispose<Paged<CampaignCard>>(
@@ -38,9 +41,11 @@ final featuredCampaignsProvider =
       (ref) => ref.watch(earnRepositoryProvider).featuredCampaigns(),
     );
 
-final campaignDetailsProvider = FutureProvider.autoDispose
-    .family<CampaignDetails, String>(
-      (ref, id) => ref.watch(earnRepositoryProvider).campaign(id),
+/// A campaign's items and the user's progress on them
+/// (`GET /mobile/campaigns/{id}/items`).
+final campaignItemsProvider = FutureProvider.autoDispose
+    .family<CampaignContent, String>(
+      (ref, id) => ref.watch(earnRepositoryProvider).campaignItems(id),
     );
 
 final quizDetailsProvider = FutureProvider.autoDispose
@@ -75,37 +80,35 @@ final dailyTasksProvider = FutureProvider.autoDispose<List<DailyTask>>(
 
 /// How many items a category currently offers — the landing tile badge and
 /// the "Remaining" stat.
+///
+/// Completed items stay in their lists as history; only the open ones are
+/// pending. Pages not loaded yet count as open.
 AsyncValue<int> watchKindCount(WidgetRef ref, EarnTaskKind kind) =>
     switch (kind) {
-      // Claimed ads and campaigns stay in their feeds as history; only the
-      // open ones are pending.
-      EarnTaskKind.ads =>
-        ref
-            .watch(adsFeedProvider)
-            .whenData((ads) => ads.where((ad) => !ad.isCompleted).length),
-      EarnTaskKind.quizzes =>
-        ref.watch(quizzesProvider).whenData((quizzes) => quizzes.length),
-      EarnTaskKind.surveys =>
-        ref.watch(surveysProvider).whenData((surveys) => surveys.length),
       EarnTaskKind.campaigns =>
         ref
             .watch(campaignsProvider)
-            .whenData(
-              (page) =>
-                  page.items.where((c) => !c.isCompleted).length +
-                  // Pages not loaded yet count as open.
-                  math.max(0, page.totalElements - page.items.length),
-            ),
+            .whenData((page) => _openCount(page, (c) => !c.isCompleted)),
+      _ =>
+        ref
+            .watch(contentListProvider(kind))
+            .whenData((page) => _openCount(page, (item) => item.canStart)),
     };
 
+int _openCount<T>(Paged<T> page, bool Function(T) open) =>
+    page.items.where(open).length +
+    math.max(0, page.totalElements - page.items.length);
+
 /// Refreshes every earning list and stat — call after a reward-producing
-/// action so the feeds drop what the user just completed and the totals move.
+/// action so the lists show what the user just completed and the totals
+/// move. The server does not cache these lists, and an answer can change
+/// which campaigns target the user, so everything is re-fetched.
 void invalidateEarnFeeds(WidgetRef ref) {
-  ref.invalidate(adsFeedProvider);
-  ref.invalidate(quizzesProvider);
-  ref.invalidate(surveysProvider);
+  ref.invalidate(contentListProvider);
+  ref.invalidate(contentDetailProvider);
   ref.invalidate(campaignsProvider);
   ref.invalidate(featuredCampaignsProvider);
+  ref.invalidate(campaignItemsProvider);
   ref.invalidate(rewardHistoryProvider);
   ref.invalidate(dailyTasksProvider);
   // A reward moves the balance and writes a ledger row, so the wallet is

@@ -8,7 +8,8 @@ import '../../../../core/constants/app_assets.dart';
 ///
 /// Shows what the task is, roughly how long it takes, and what it pays.
 /// A [completed] task — one the user already claimed — is dimmed and badged
-/// instead of offering its reward.
+/// instead of offering its reward. An [unavailable] one is dimmed too, with
+/// the reason in place of the reward.
 class EarnTaskCard extends StatelessWidget {
   const EarnTaskCard({
     super.key,
@@ -20,6 +21,7 @@ class EarnTaskCard extends StatelessWidget {
     this.iconColor = AppColors.blue,
     this.iconBackground = AppColors.blueTint,
     this.completed = false,
+    this.unavailable,
   });
 
   final String title;
@@ -32,6 +34,9 @@ class EarnTaskCard extends StatelessWidget {
   final Color iconColor;
   final Color iconBackground;
   final bool completed;
+
+  /// Why the user cannot do this right now — the server's message.
+  final String? unavailable;
 
   @override
   Widget build(BuildContext context) {
@@ -74,7 +79,10 @@ class EarnTaskCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                if (subtitle != null || reward != null || completed) ...[
+                if (subtitle != null ||
+                    reward != null ||
+                    completed ||
+                    unavailable != null) ...[
                   const SizedBox(height: 12),
                   const Divider(height: 1, color: AppColors.border),
                   const SizedBox(height: 10),
@@ -91,6 +99,18 @@ class EarnTaskCard extends StatelessWidget {
                       ),
                       if (completed)
                         const _CompletedBadge()
+                      else if (unavailable != null)
+                        Flexible(
+                          child: Text(
+                            unavailable!,
+                            textAlign: TextAlign.end,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.slate,
+                            ),
+                          ),
+                        )
                       else if (reward != null)
                         Text(
                           reward!,
@@ -109,12 +129,13 @@ class EarnTaskCard extends StatelessWidget {
         ),
       ),
     );
-    return completed
-        ? Semantics(
-            label: 'Completed',
-            child: Opacity(opacity: 0.7, child: card),
-          )
-        : card;
+    if (completed) {
+      return Semantics(
+        label: 'Completed',
+        child: Opacity(opacity: 0.7, child: card),
+      );
+    }
+    return unavailable != null ? Opacity(opacity: 0.6, child: card) : card;
   }
 }
 

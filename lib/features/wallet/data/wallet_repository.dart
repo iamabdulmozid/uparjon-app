@@ -24,8 +24,12 @@ class WalletRepository {
 
   /// `GET /mobile/wallet/transactions` — newest first.
   ///
+  /// The server's default order is oldest first, so the sort is explicit.
   /// [type] filters to `REWARD`, `BONUS`, `WITHDRAWAL` or
   /// `ADMIN_ADJUSTMENT`; omit it for everything.
+  ///
+  /// [WalletTransaction.isLedgerNote] rows are dropped, so a page may hold
+  /// fewer than [size] items.
   Future<Paged<WalletTransaction>> transactions({
     int page = 0,
     int size = 20,
@@ -33,12 +37,27 @@ class WalletRepository {
   }) async {
     final data = await _api.get(
       '/mobile/wallet/transactions',
-      queryParameters: {'page': page, 'size': size, 'type': ?type},
+      queryParameters: {
+        'page': page,
+        'size': size,
+        'sort': 'createdAt,desc',
+        'type': ?type,
+      },
     );
     if (data is! Map) return Paged.empty();
-    return Paged.fromJson(
+    final parsed = Paged.fromJson(
       data.cast<String, dynamic>(),
       WalletTransaction.fromJson,
+    );
+    return Paged(
+      items: [
+        for (final t in parsed.items)
+          if (!t.isLedgerNote) t,
+      ],
+      page: parsed.page,
+      totalPages: parsed.totalPages,
+      totalElements: parsed.totalElements,
+      isLast: parsed.isLast,
     );
   }
 

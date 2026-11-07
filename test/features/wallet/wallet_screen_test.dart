@@ -109,6 +109,41 @@ void main() {
     expect(find.text('Pending verification'), findsOneWidget);
   });
 
+  // The server books an ad reward twice: REWARD_PENDING when the view is
+  // recorded, REWARD_APPROVED when it pays. Only the second is money.
+  testWidgets('an ad reward is listed once, newest first', (tester) async {
+    final api = walletApi(
+      available: 15,
+      transactions: [
+        {
+          'id': 't-pending',
+          'type': 'REWARD_PENDING',
+          'amount': 15,
+          'status': 'COMPLETED',
+          'description': 'Ad reward pending for ad: Smart QR Promo',
+          'createdAt': '2026-10-01T17:55:37',
+        },
+        {
+          'id': 't-approved',
+          'type': 'REWARD_APPROVED',
+          'amount': 15,
+          'status': 'COMPLETED',
+          'description': 'Ad reward approved. Reward ID: r-1',
+          'createdAt': '2026-10-01T17:55:37',
+        },
+      ],
+    );
+    await openWallet(tester, api);
+
+    expect(find.text('Video Ad'), findsOneWidget);
+    expect(find.text('+ ৳15.00'), findsOneWidget);
+    // The API's default order is oldest first.
+    final sorts = api.calls
+        .where((c) => c.path == '/mobile/wallet/transactions')
+        .map((c) => c.queryParameters['sort']);
+    expect(sorts, everyElement('createdAt,desc'));
+  });
+
   testWidgets('Load more asks the API for a longer page', (tester) async {
     final api = walletApi(
       available: 30,

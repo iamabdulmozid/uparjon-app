@@ -15,6 +15,16 @@ abstract final class AppEnv {
     defaultValue: 'https://api.avytor.com/api/v1',
   );
 
+  /// Makes a media link absolute. Banners, thumbnails and creatives may
+  /// arrive as a server-relative `/api/v1/files/...` path, which only means
+  /// something against the API's own host.
+  static String? resolveMediaUrl(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    final url = raw.trim();
+    if (!url.startsWith('/')) return url;
+    return Uri.parse(apiBaseUrl).resolve(url).toString();
+  }
+
   static bool get isProd => name == 'prod';
   static bool get isDev => name == 'dev';
 }

@@ -52,6 +52,8 @@ class TransactionTile extends StatelessWidget {
       WalletActivityKind.quiz => 'Completed a quiz',
       WalletActivityKind.campaign => 'Completed a campaign',
       WalletActivityKind.withdrawal => 'Paid out from your wallet',
+      WalletActivityKind.cashback => 'Cashback for your purchase',
+      WalletActivityKind.cashbackReversal => 'Taken back after a refund',
       WalletActivityKind.other =>
         t.description.isEmpty ? 'Added to your wallet' : t.description,
     };
@@ -84,6 +86,11 @@ class TransactionTile extends StatelessWidget {
       label: 'Withdrawal',
       icon: AppAssets.iconUpload,
       tint: AppColors.blueTint,
+    ),
+    WalletActivityKind.cashback || WalletActivityKind.cashbackReversal => (
+      label: 'Cashback',
+      icon: AppAssets.iconWallet,
+      tint: AppColors.greenTint,
     ),
     WalletActivityKind.other => (
       label: 'Reward',

@@ -78,7 +78,13 @@ void main() {
       expect(row.type, 'BONUS');
       expect(row.isDebit, isFalse);
       expect(row.isPending, isFalse);
-      expect(row.createdAt, DateTime.parse('2026-09-20T14:26:05.417647'));
+      // Sent as UTC without a zone.
+      expect(
+        row.createdAt!.isAtSameMomentAs(
+          DateTime.parse('2026-09-20T14:26:05.417647Z'),
+        ),
+        isTrue,
+      );
     });
 
     test('recognises a survey payout the API books as a BONUS', () {
@@ -94,10 +100,8 @@ void main() {
 
     test('classifies every earning type and the payout', () {
       WalletActivityKind kindOf(String type, String description) =>
-          WalletTransaction.fromJson({
-            'type': type,
-            'description': description,
-          }).kind;
+          WalletTransaction.fromJson({'type': type, 'description': description})
+              .kind;
 
       expect(
         kindOf('REWARD', 'Ad Reward: Grameenphone 5G Promo'),
@@ -121,8 +125,10 @@ void main() {
         kindOf('WITHDRAWAL', 'Payout: ad revenue share'),
         WalletActivityKind.withdrawal,
       );
-      expect(kindOf('ADMIN_ADJUSTMENT', 'Goodwill credit'),
-          WalletActivityKind.other);
+      expect(
+        kindOf('ADMIN_ADJUSTMENT', 'Goodwill credit'),
+        WalletActivityKind.other,
+      );
     });
 
     test('keeps the sign the API puts on a withdrawal', () {

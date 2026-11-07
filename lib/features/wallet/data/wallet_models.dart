@@ -7,6 +7,8 @@
 /// does arithmetic on it, only formats it.
 library;
 
+import '../../../core/utils/server_time.dart';
+
 /// Balance summary (`GET /mobile/wallet/overview`).
 ///
 /// The same shape rides inside the home feed's `wallet` block, where only the
@@ -41,8 +43,10 @@ class WalletOverview {
   );
 
   factory WalletOverview.fromJson(Map<String, dynamic> json) => WalletOverview(
-    availableBalance: (json['availableBalance'] ?? json['balance']) as num? ?? 0,
-    pendingBalance: (json['pendingBalance'] ?? json['pendingAmount']) as num? ?? 0,
+    availableBalance:
+        (json['availableBalance'] ?? json['balance']) as num? ?? 0,
+    pendingBalance:
+        (json['pendingBalance'] ?? json['pendingAmount']) as num? ?? 0,
     lifetimeEarnings: json['lifetimeEarnings'] as num? ?? 0,
     totalWithdrawn: json['totalWithdrawn'] as num? ?? 0,
     pendingRewards: (json['pendingRewards'] as num?)?.toInt() ?? 0,
@@ -67,7 +71,8 @@ class WalletTransaction {
 
   final String id;
 
-  /// `REWARD`, `BONUS`, `WITHDRAWAL`, `ADMIN_ADJUSTMENT`.
+  /// `REWARD`, `REWARD_PENDING`, `REWARD_APPROVED`, `BONUS`, `WITHDRAWAL`,
+  /// `ADMIN_ADJUSTMENT`, `CAMPAIGN_CASHBACK`, `CAMPAIGN_CASHBACK_REVERSAL`.
   final String type;
 
   /// Signed: withdrawals arrive negative.
@@ -82,11 +87,24 @@ class WalletTransaction {
   bool get isPending => status.toUpperCase() == 'PENDING';
   bool get isFailed => status.toUpperCase() == 'FAILED';
 
+  /// An ad reward is booked as two rows of the same amount: `REWARD_PENDING`
+  /// when the view is recorded, then `REWARD_APPROVED` when it is paid. Only
+  /// the second moves the balance; showing both would list every ad twice.
+  /// Money still on hold shows in [WalletOverview.pendingBalance].
+  bool get isLedgerNote => type.toUpperCase() == 'REWARD_PENDING';
+
   /// Which earning type paid this out, inferred from [type] and the
   /// description the server writes ("Completed Survey: …", "Ad Reward: …").
   /// The API sends no category field, so the text is the only signal.
   WalletActivityKind get kind {
-    if (type.toUpperCase() == 'WITHDRAWAL') return WalletActivityKind.withdrawal;
+    switch (type.toUpperCase()) {
+      case 'WITHDRAWAL':
+        return WalletActivityKind.withdrawal;
+      case 'CAMPAIGN_CASHBACK':
+        return WalletActivityKind.cashback;
+      case 'CAMPAIGN_CASHBACK_REVERSAL':
+        return WalletActivityKind.cashbackReversal;
+    }
     final text = description.toLowerCase();
     if (text.contains('survey')) return WalletActivityKind.survey;
     if (text.contains('quiz')) return WalletActivityKind.quiz;
@@ -102,12 +120,25 @@ class WalletTransaction {
         amount: json['amount'] as num? ?? 0,
         status: json['status'] as String? ?? '',
         description: json['description'] as String? ?? '',
-        createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
+        createdAt: ServerTime.parse(json['createdAt']),
       );
 }
 
 /// What a transaction was for — drives its icon and tint.
-enum WalletActivityKind { ad, survey, quiz, campaign, withdrawal, other }
+enum WalletActivityKind {
+  ad,
+  survey,
+  quiz,
+  campaign,
+  withdrawal,
+
+  /// Purchase cashback paid once the order was delivered.
+  cashback,
+
+  /// Cashback taken back after the order was refunded.
+  cashbackReversal,
+  other,
+}
 
 /// Earnings totals (`GET /mobile/wallet/earnings-summary`).
 class EarningsSummary {

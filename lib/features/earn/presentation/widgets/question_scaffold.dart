@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../../core/ui/app_button.dart';
@@ -289,10 +290,14 @@ class AnswerTextField extends StatelessWidget {
     super.key,
     required this.onChanged,
     this.initialValue,
+    this.maxLength,
   });
 
   final String? initialValue;
   final ValueChanged<String> onChanged;
+
+  /// Cuts input off at this many characters, without a visible counter.
+  final int? maxLength;
 
   @override
   Widget build(BuildContext context) {
@@ -309,6 +314,9 @@ class AnswerTextField extends StatelessWidget {
         expands: true,
         maxLines: null,
         textAlignVertical: TextAlignVertical.top,
+        inputFormatters: [
+          if (maxLength != null) LengthLimitingTextInputFormatter(maxLength),
+        ],
         style: const TextStyle(fontSize: 16, color: AppColors.ink),
         decoration: InputDecoration(
           hintText: 'Your answer here.',

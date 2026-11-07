@@ -1,17 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uparjon/app/router/routes.dart';
+import 'package:uparjon/core/utils/formatters.dart';
+import 'package:uparjon/features/earn/presentation/campaign_screen.dart';
 import 'package:uparjon/features/earn/presentation/earn_screen.dart';
 import 'package:uparjon/features/earn/presentation/task_list_screen.dart';
 
+import '../../support/earn_fixtures.dart';
 import '../../support/fake_api.dart';
 import '../../support/pump_app.dart';
 
-const regalAd = {
-  'adId': 'ad-1',
-  'title': 'Regal Furniture Up to 15% Off',
-  'duration': 180,
-  'reward': 10,
-};
+final regalAd = contentItem(
+  title: 'Regal Furniture Up to 15% Off',
+  durationSeconds: 180,
+);
 
 const regalReward = {
   'rewardId': 'r-1',
@@ -29,22 +30,17 @@ FakeApi earnApi({
   List<Map<String, dynamic>> rewards = const [],
   List<Map<String, dynamic>> dailyTasks = const [],
   num today = 0,
-}) => FakeApi({
-  'GET /users/me': ok({'id': 'u1', 'fullName': 'Mehedi Hasan'}),
-  // The ads, quiz and survey feeds answer with a bare array, not the envelope.
-  'GET /mobile/ads/feed': rawJson(ads),
-  'GET /mobile/quizzes': rawJson(quizzes),
-  'GET /mobile/surveys': rawJson(surveys),
-  'GET /mobile/campaigns': ok(springPage(campaigns)),
-  'GET /mobile/rewards/history': ok(springPage(rewards)),
-  'GET /mobile/tasks/daily': ok(dailyTasks),
-  'GET /mobile/wallet/earnings-summary': ok({
-    'today': today,
-    'thisWeek': today,
-    'thisMonth': today,
-    'lifetime': today,
-  }),
-});
+}) => FakeApi(
+  earnRoutes(
+    ads: ads,
+    surveys: surveys,
+    quizzes: quizzes,
+    campaigns: campaigns,
+    rewards: rewards,
+    dailyTasks: dailyTasks,
+    today: today,
+  ),
+);
 
 void main() {
   Future<void> openEarn(WidgetTester tester, FakeApi api) async {
@@ -84,9 +80,7 @@ void main() {
         tester,
         earnApi(
           ads: [regalAd],
-          surveys: [
-            {'id': 's-1', 'title': 'Foods', 'rewardAmount': 25},
-          ],
+          surveys: [contentItem(id: 's-1', kind: 'SURVEY', title: 'Foods')],
           campaigns: [
             {'id': 'c-1', 'title': 'Try our app'},
           ],
@@ -110,16 +104,16 @@ void main() {
       expect(find.text('Recent Activity'), findsOneWidget);
       expect(find.text('Regal Furniture'), findsOneWidget);
       expect(find.text('+ ৳10.00'), findsOneWidget);
-      expect(find.text('11 Jul 26 | 10:10 am'), findsOneWidget);
+      // The API's zone-less timestamps are UTC, shown in local time.
+      final local = DateTime.utc(2026, 7, 11, 10, 10).toLocal();
+      expect(find.text(Formatters.activityTime(local)), findsOneWidget);
     });
 
     testWidgets('a failing feed only marks its own tile', (tester) async {
       final api = earnApi(
-        surveys: [
-          {'id': 's-1', 'title': 'Foods'},
-        ],
+        surveys: [contentItem(id: 's-1', kind: 'SURVEY', title: 'Foods')],
       );
-      api.routes['GET /mobile/ads/feed'] = apiError(
+      api.routes['GET /mobile/content/ads'] = apiError(
         'INTERNAL_SERVER_ERROR',
         status: 500,
       );
@@ -170,7 +164,8 @@ void main() {
             {
               'id': 'c-1',
               'title': 'Install and try our app',
-              'campaignType': 'INSTALL',
+              'contentType': 'VIDEO',
+              'contentTypeLabel': 'Video',
               'rewardAmount': 50,
               'estimatedSeconds': 120,
             },
@@ -180,7 +175,7 @@ void main() {
       );
 
       expect(find.text('Install and try our app'), findsOneWidget);
-      expect(find.text('INSTALL · 2 min'), findsOneWidget);
+      expect(find.text('Video · 2 min'), findsOneWidget);
       expect(find.text('+ ৳50.00'), findsOneWidget);
     });
 
@@ -203,24 +198,19 @@ void main() {
     });
   });
 
-  // API spec §8.1 / §8.3.1: what the user already claimed stays in the feed
-  // as history, flagged `viewed: true` / `status: "COMPLETED"`.
+  // What the user already completed stays listed as history, with
+  // `progress: COMPLETED` (API changes 2026-10-11 §1.6).
   group('claimed tasks', () {
-    // The spec's feed item, with every alias it sends.
-    const claimedAd = {
-      'id': 'ad-2',
-      'adId': 'ad-2',
-      'title': 'Apex Footwear September Collection',
-      'mediaUrl': 'https://cdn.test/apex.mp4',
-      'videoUrl': 'https://cdn.test/apex.mp4',
-      'durationSeconds': 45,
-      'duration': 45,
-      'rewardAmount': 20,
-      'reward': 20,
-      'viewed': true,
-      'status': 'COMPLETED',
-    };
-    const openAd = {...regalAd, 'viewed': false, 'status': 'ACTIVE'};
+    final claimedAd = contentItem(
+      id: 'ad-2',
+      title: 'Apex Footwear September Collection',
+      durationSeconds: 45,
+      reward: 20,
+      progress: 'COMPLETED',
+      available: false,
+      unavailableCode: 'DUPLICATE_PARTICIPATION',
+    );
+    final openAd = regalAd;
 
     testWidgets('are badged, listed last, and not counted as remaining', (
       tester,
@@ -233,7 +223,7 @@ void main() {
       expect(find.text('+ ৳20.00'), findsNothing);
       expect(find.text('01'), findsOneWidget);
 
-      final open = tester.getTopLeft(find.text(regalAd['title']! as String));
+      final open = tester.getTopLeft(find.text(openAd['title']! as String));
       final claimed = tester.getTopLeft(
         find.text(claimedAd['title']! as String),
       );
@@ -253,7 +243,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Overview'), findsNothing);
-      expect(api.callCount('GET /ads/ad-2'), 0);
+      expect(api.callCount('GET /mobile/content/ad-2'), 0);
     });
 
     testWidgets('do not show as pending on the landing tiles', (tester) async {
@@ -265,7 +255,7 @@ void main() {
             {
               'id': 'c-1',
               'title': 'Walton Smart Electronics',
-              'campaignType': 'VIDEO',
+              'contentTypeLabel': 'Video',
               'rewardAmount': 15,
               'status': 'COMPLETED',
             },
@@ -277,29 +267,36 @@ void main() {
       expect(find.text('No task for today!'), findsNWidgets(4));
     });
 
-    testWidgets('a completed campaign cannot be started again', (tester) async {
+    // Its items are the record of what the user did, so it still opens.
+    testWidgets('a completed campaign opens on its items', (tester) async {
       final api = earnApi(
         campaigns: [
           {
             'id': 'c-1',
             'title': 'Walton Smart Electronics',
-            'campaignType': 'VIDEO',
+            'contentTypeLabel': 'Video',
             'rewardAmount': 15,
             'status': 'COMPLETED',
           },
         ],
       );
+      api.routes['GET /mobile/campaigns/c-1/items'] = ok({
+        'id': 'c-1',
+        'title': 'Walton Smart Electronics',
+        'totalItems': 1,
+        'completedItems': 1,
+        'ads': [contentItem(progress: 'COMPLETED', available: false)],
+        'quizzes': [],
+        'surveys': [],
+      });
       await openList(tester, api, 'campaigns');
 
       expect(find.text('Completed'), findsOneWidget);
       await tester.tap(find.text('Walton Smart Electronics'));
-      await tester.pump();
-
-      expect(
-        find.text('You have already claimed your reward for this campaign.'),
-        findsOneWidget,
-      );
       await tester.pumpAndSettle();
+
+      expect(find.byType(CampaignScreen), findsOneWidget);
+      expect(find.text('1 of 1 done'), findsOneWidget);
       expect(api.callCount('POST /mobile/campaigns/c-1/start'), 0);
     });
   });

@@ -16,9 +16,7 @@ void main() {
 
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(
-          body: TaskOverviewDialog(child: SizedBox(height: 120)),
-        ),
+        home: Scaffold(body: TaskOverviewDialog(child: SizedBox(height: 120))),
       ),
     );
     await tester.pumpAndSettle();
