@@ -104,8 +104,8 @@ void main() {
       expect(find.text('Recent Activity'), findsOneWidget);
       expect(find.text('Regal Furniture'), findsOneWidget);
       expect(find.text('+ ৳10.00'), findsOneWidget);
-      // The API's zone-less timestamps are UTC, shown in local time.
-      final local = DateTime.utc(2026, 7, 11, 10, 10).toLocal();
+      // The API's zone-less timestamps are Dhaka time, shown in local time.
+      final local = DateTime.utc(2026, 7, 11, 4, 10).toLocal();
       expect(find.text(Formatters.activityTime(local)), findsOneWidget);
     });
 
@@ -146,6 +146,35 @@ void main() {
         find.text('Completed this ad successfully! and earned ৳10.00'),
         findsOneWidget,
       );
+    });
+
+    // Mobile API changes 2026-11-11 §5: a reward can be held for review,
+    // then approved or rejected.
+    testWidgets('held and rejected rewards say so, not that they paid', (
+      tester,
+    ) async {
+      await openList(
+        tester,
+        earnApi(
+          rewards: [
+            {...regalReward, 'rewardId': 'r-1', 'status': 'PENDING'},
+            {
+              ...regalReward,
+              'rewardId': 'r-2',
+              'campaignName': 'Walton',
+              'status': 'REJECTED',
+            },
+          ],
+        ),
+        'ads',
+      );
+
+      expect(find.text('Completed! ৳10.00 is under review'), findsOneWidget);
+      expect(
+        find.text('Completed, but the reward was not approved after review'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('and earned'), findsNothing);
     });
 
     testWidgets('an empty feed explains itself instead of showing nothing', (

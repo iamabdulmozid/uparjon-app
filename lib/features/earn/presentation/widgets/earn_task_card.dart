@@ -171,14 +171,15 @@ class _CompletedBadge extends StatelessWidget {
 }
 
 /// A finished task (Figma: card tinted in the category colour with a check
-/// badge and the earned amount). [pending] rewards are still in fraud
-/// validation.
+/// badge and the earned amount). A [pending] reward is held for review; a
+/// [rejected] one was turned down.
 class CompletedTaskCard extends StatelessWidget {
   const CompletedTaskCard({
     super.key,
     required this.title,
     required this.message,
     this.pending = false,
+    this.rejected = false,
     this.icon = AppAssets.iconClipboard,
     this.color = AppColors.blue,
     this.tint = AppColors.blueTint,
@@ -187,6 +188,9 @@ class CompletedTaskCard extends StatelessWidget {
   final String title;
   final String message;
   final bool pending;
+
+  /// The reward was turned down after review.
+  final bool rejected;
   final String icon;
   final Color color;
   final Color tint;
@@ -224,11 +228,19 @@ class CompletedTaskCard extends StatelessWidget {
                 width: 22,
                 height: 22,
                 decoration: BoxDecoration(
-                  color: pending ? AppColors.amber : color,
+                  color: pending
+                      ? AppColors.amber
+                      : rejected
+                      ? AppColors.slate
+                      : color,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  pending ? Icons.hourglass_bottom_rounded : Icons.check,
+                  pending
+                      ? Icons.hourglass_bottom_rounded
+                      : rejected
+                      ? Icons.close_rounded
+                      : Icons.check,
                   size: 14,
                   color: Colors.white,
                 ),
@@ -241,7 +253,9 @@ class CompletedTaskCard extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,
-              color: pending ? AppColors.slate : AppColors.greenDeep,
+              color: pending || rejected
+                  ? AppColors.slate
+                  : AppColors.greenDeep,
             ),
           ),
         ],

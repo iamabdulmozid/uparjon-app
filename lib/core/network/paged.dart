@@ -1,7 +1,9 @@
-/// A Spring `Page` envelope.
+/// The one page shape every paged list answers with in `data` (Mobile API
+/// changes 2026-11-11 §3): `content`, `number`, `size`, `totalElements`,
+/// `totalPages`, `numberOfElements`, `first`, `last`, `hasNext`, `empty`.
 ///
 /// Lives in core because several features page through the same shape
-/// (campaigns, reward history, wallet transactions).
+/// (content lists, campaigns, reward history, wallet transactions).
 class Paged<T> {
   const Paged({
     required this.items,
@@ -26,13 +28,13 @@ class Paged<T> {
     items: (json['content'] as List? ?? [])
         .map((e) => itemFromJson((e as Map).cast<String, dynamic>()))
         .toList(),
-    page:
-        (json['number'] as num?)?.toInt() ??
-        ((json['pageable'] as Map?)?['pageNumber'] as num?)?.toInt() ??
-        0,
+    page: (json['number'] as num?)?.toInt() ?? 0,
     totalPages: (json['totalPages'] as num?)?.toInt() ?? 0,
     totalElements: (json['totalElements'] as num?)?.toInt() ?? 0,
-    isLast: json['last'] as bool? ?? true,
+    isLast: switch (json['hasNext']) {
+      final bool hasNext => !hasNext,
+      _ => json['last'] as bool? ?? true,
+    },
   );
 
   static Paged<T> empty<T>() => Paged<T>(

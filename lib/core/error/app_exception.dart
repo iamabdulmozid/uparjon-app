@@ -84,9 +84,10 @@ abstract final class ApiErrorCodes {
   static const String insufficientBalance = 'INSUFFICIENT_BALANCE';
   static const String notFound = 'NOT_FOUND';
 
-  // Campaign participation rules (API changes 2026-10-11 §4). Each is also
-  // what `/campaigns/{id}/availability` returns as `code` and a content item
-  // as `unavailableCode`; the server's message is safe to show.
+  // Campaign participation rules (API changes 2026-10-11 §4 and 2026-11-11
+  // §1). Each is also what `/campaigns/{id}/availability` returns as `code`
+  // and a content item as `unavailableCode`; the server's message is safe to
+  // show.
 
   /// `409`: scheduled, the start time has not come yet.
   static const String campaignNotStarted = 'CAMPAIGN_NOT_STARTED';
@@ -95,6 +96,12 @@ abstract final class ApiErrorCodes {
   /// `409`: paused, cancelled or otherwise not live.
   static const String campaignInactive = 'CAMPAIGN_INACTIVE';
   static const String campaignBudgetExhausted = 'CAMPAIGN_BUDGET_EXHAUSTED';
+
+  /// `409`: live, but outside the hours it is shown in.
+  static const String outsideDeliverySchedule = 'OUTSIDE_DELIVERY_SCHEDULE';
+
+  /// `409`: the campaign has shown all the views it may today.
+  static const String dailyViewCapReached = 'DAILY_VIEW_CAP_REACHED';
   static const String participantTargetReached = 'PARTICIPANT_TARGET_REACHED';
 
   /// `409`: the cashback product is no longer sold.

@@ -152,7 +152,9 @@ class EarnScreen extends ConsumerWidget {
                                   ? 'Reward'
                                   : item.campaignName,
                               subtitle: item.isPending
-                                  ? 'Pending verification'
+                                  ? 'Under review'
+                                  : item.isRejected
+                                  ? 'Not approved after review'
                                   : 'Reward added to your wallet',
                               amount:
                                   Formatters.rewardOrNull(item.rewardAmount) ??

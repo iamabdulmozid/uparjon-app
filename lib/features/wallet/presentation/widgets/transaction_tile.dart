@@ -44,7 +44,7 @@ class TransactionTile extends StatelessWidget {
   /// long ("Completed Survey: National Consumer … 17897941198473658") and
   /// would be ellipsized to noise. Status comes first when it is not settled.
   static String _subtitleOf(WalletTransaction t) {
-    if (t.isPending) return 'Pending verification';
+    if (t.isPending) return 'Under review';
     if (t.isFailed) return 'Could not be completed';
     return switch (t.kind) {
       WalletActivityKind.ad => 'Watched a video ad',

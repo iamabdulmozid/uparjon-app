@@ -20,7 +20,7 @@ void main() {
     test('reads the item fields', () {
       final item = ContentItem.fromJson({
         ...contentItem(kind: 'QUIZ', questionCount: 2, passingScore: 80),
-        'campaignEndAt': '2026-10-31T23:59:00',
+        'campaignEndAt': '2026-10-31T23:59:00Z',
       });
 
       expect(item.id, 'ad-1');
@@ -32,7 +32,7 @@ void main() {
       expect(item.passingScore, 80);
       expect(item.hasQuestions, isTrue);
       expect(item.campaignId, 'c-1');
-      // Zone-less server times are UTC.
+      // Campaign dates are the one kind sent in UTC, with a Z.
       expect(item.campaignEndAt, DateTime.utc(2026, 10, 31, 23, 59).toLocal());
     });
 
@@ -141,10 +141,21 @@ void main() {
   });
 
   group('AdView', () {
-    test('the first call only starts the view', () {
-      final view = AdView.fromJson({'status': 'STARTED'});
-      expect(view.isStarted, isTrue);
-      expect(view.isRewarded, isFalse);
+    test('start hands back the view every later step takes', () {
+      final session = AdViewSession.fromJson({
+        'adViewId': 'v-1',
+        'startedAt': '2026-11-11T14:30:00',
+      });
+      expect(session.adViewId, 'v-1');
+      // Dhaka wall-clock time.
+      expect(
+        session.startedAt!.isAtSameMomentAs(DateTime.utc(2026, 11, 11, 8, 30)),
+        isTrue,
+      );
+    });
+
+    test('a started view has earned nothing', () {
+      expect(AdView.fromJson({'status': 'STARTED'}).isRewarded, isFalse);
     });
 
     test('an item with questions waits for its answers', () {
@@ -214,7 +225,8 @@ void main() {
       expect(result.cashback.single.amount, 50);
       expect(
         result.cashback.single.purchaseDeadline,
-        DateTime.utc(2026, 11, 8, 23, 59).toLocal(),
+        // No offset: Dhaka time, 6 h ahead of UTC.
+        DateTime.utc(2026, 11, 8, 17, 59).toLocal(),
       );
     });
   });

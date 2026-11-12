@@ -20,8 +20,8 @@ FakeReply apiError(
   body: {'success': false, 'errorCode': errorCode, 'message': message},
 );
 
-/// A page of items, shaped like Spring's `Page` — what the campaign,
-/// reward-history and wallet-transaction endpoints wrap their lists in.
+/// A page of items in the API's one page shape (2026-11-11 §3) — what every
+/// paged list wraps its items in.
 Map<String, dynamic> springPage(
   List<Map<String, dynamic>> items, {
   int size = 20,
@@ -35,14 +35,12 @@ Map<String, dynamic> springPage(
     'totalElements': total,
     'totalPages': total == 0 ? 0 : (total / size).ceil(),
     'first': true,
+    'numberOfElements': items.length,
     'last': items.length >= total,
+    'hasNext': items.length < total,
     'empty': items.isEmpty,
   };
 }
-
-/// A response with no envelope at all — the ad view and answer-submit
-/// replies come back like this.
-FakeReply rawJson(Object? body) => (status: 200, body: body);
 
 /// Dio transport that answers from a routing table instead of the network.
 ///

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uparjon/app/router/routes.dart';
 import 'package:uparjon/core/ui/app_button.dart';
 import 'package:uparjon/features/earn/presentation/campaign_screen.dart';
@@ -11,27 +12,45 @@ import '../../support/earn_fixtures.dart';
 import '../../support/fake_api.dart';
 import '../../support/pump_app.dart';
 
-const _view = 'POST /mobile/ads/ad-1/view';
+// The ad-view flow (Mobile API changes 2026-11-11 §1). The fake server
+// always opens view `v-1`.
+const _start = 'POST /ad-views/start';
+const _complete = 'POST /ad-views/v-1/complete';
+const _answers = 'POST /ad-views/v-1/answers';
 
-/// The view endpoint's replies in order: the first call opens the view, the
-/// second completes it with [completion]. Both are un-enveloped.
-List<FakeReply> twoCallView(FakeReply completion) => [
-  rawJson({'id': 'v-1', 'adId': 'ad-1', 'status': 'STARTED'}),
-  completion,
-];
+/// `POST /ad-views/start`: the view is open.
+FakeReply started() => ok({
+  'adViewId': 'v-1',
+  'startedAt': '2026-11-11T14:30:00',
+}, message: 'Ad view started');
+
+/// `POST /ad-views/{id}/complete`, enveloped like every other reply now.
+FakeReply completed({
+  String status = 'COMPLETED',
+  num earned = 0,
+  bool awaitingAnswers = false,
+}) => ok({
+  'id': 'v-1',
+  'adId': 'ad-1',
+  'status': status,
+  'watchedDurationSeconds': 3,
+  'rewardEarned': earned,
+  'awaitingAnswers': awaitingAnswers,
+}, message: 'Ad completed');
 
 /// Drives the reward-producing flows end to end against the fake transport,
 /// checking the request bodies the API actually requires
-/// (`docs/API Docs V2/mobile-api-changes-2026-10-11.md`).
+/// (`docs/API Docs V3/document.pdf`).
 void main() {
   /// Pushes a runner screen directly, skipping the list and its overview.
   Future<void> open(
     WidgetTester tester,
     FakeApi api,
     String route,
-    String id,
-  ) async {
-    await pumpApp(tester, api: api, signedIn: true);
+    String id, {
+    Map<String, Object> prefs = const {},
+  }) async {
+    await pumpApp(tester, api: api, signedIn: true, prefs: prefs);
     await goTo(tester, Routes.home);
     router(tester).pushNamed(route, pathParameters: {'id': id});
     await tester.pumpAndSettle();
@@ -61,19 +80,17 @@ void main() {
   VoidCallback? handlerOf(WidgetTester tester, String label) =>
       tester.widget<AppButton>(find.widgetWithText(AppButton, label)).onPressed;
 
-  List<Map<String, dynamic>> bodiesSentTo(FakeApi api, String key) => [
-    for (final call in api.calls)
-      if ('${call.method} ${call.path}' == key)
-        (call.data as Map).cast<String, dynamic>(),
-  ];
-
   List<Object?> keysSentTo(FakeApi api, String key) => [
     for (final call in api.calls)
       if ('${call.method} ${call.path}' == key) call.headers['Idempotency-Key'],
   ];
 
   group('plain ad', () {
-    FakeApi adApi({Map<String, dynamic>? item, List<FakeReply>? view}) {
+    FakeApi adApi({
+      Map<String, dynamic>? item,
+      List<FakeReply>? start,
+      List<FakeReply>? complete,
+    }) {
       final ad = item ?? contentItem();
       return FakeApi(
         {
@@ -81,20 +98,13 @@ void main() {
           'GET /mobile/content/ad-1': ok({'item': ad, 'questions': []}),
         },
         sequences: {
-          _view:
-              view ??
-              twoCallView(
-                rawJson({
-                  'status': 'REWARDED',
-                  'rewardEarned': 10,
-                  'awaitingAnswers': false,
-                }),
-              ),
+          _start: start ?? [started()],
+          _complete: complete ?? [completed(status: 'REWARDED', earned: 10)],
         },
       );
     }
 
-    testWidgets('opens the view on play and completes it at the end', (
+    testWidgets('starts the view on play and completes it at the end', (
       tester,
     ) async {
       final api = adApi();
@@ -109,30 +119,32 @@ void main() {
       expect(find.byType(ContentItemScreen), findsOneWidget);
       expect(find.text('Watch till the end'), findsOneWidget);
       // Nothing is sent until the user presses play.
-      expect(api.callCount(_view), 0);
+      expect(api.callCount(_start), 0);
 
       await tester.tap(find.byIcon(Icons.play_arrow_rounded));
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
-      // The view was opened before the media ran, and only once.
-      expect(api.callCount(_view), 1);
-      expect(bodiesSentTo(api, _view).single['watchedDurationSeconds'], 0);
+      // The view was started before the media ran, and only once.
+      expect(api.bodyOf(_start), {'adId': 'ad-1', 'deviceId': isNotEmpty});
+      expect(api.callCount(_start), 1);
+      expect(api.callCount(_complete), 0);
 
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
-      final bodies = bodiesSentTo(api, _view);
-      expect(bodies, hasLength(2));
-      expect(bodies.last['watchedDurationSeconds'], 3);
-      expect(bodies.last['deviceId'], isNotEmpty);
-      // Two separate requests: one key each, or the server would replay the
-      // first answer to the second call.
-      final keys = keysSentTo(api, _view);
-      expect(keys, everyElement(isNotNull));
-      expect(keys.first, isNot(keys.last));
+      // Completed on the view the server handed back.
+      expect(api.bodyOf(_complete), {'watchedDurationSeconds': 3});
+      // Two separate requests: one key each.
+      final startKey = keysSentTo(api, _start).single;
+      final completeKey = keysSentTo(api, _complete).single;
+      expect(startKey, isNotNull);
+      expect(completeKey, isNotNull);
+      expect(startKey, isNot(completeKey));
 
       expect(find.text('Congratulation!'), findsOneWidget);
-      expect(find.textContaining('৳10.00 has been added'), findsOneWidget);
+      // The reply cannot say whether the reward was held for review.
+      expect(find.textContaining('You earned ৳10.00.'), findsOneWidget);
+      expect(find.textContaining('show as pending'), findsOneWidget);
 
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
@@ -140,11 +152,11 @@ void main() {
       expect(find.text('On going Ad'), findsOneWidget);
     });
 
-    testWidgets('the media waits for the view to open', (tester) async {
+    testWidgets('the media waits for the view to start', (tester) async {
       final api = adApi(
-        view: [
+        start: [
           (status: 503, body: {'success': false, 'message': 'Down'}),
-          ...twoCallView(rawJson({'status': 'REWARDED', 'rewardEarned': 10})),
+          started(),
         ],
       );
       await open(tester, api, Routes.contentItem, 'ad-1');
@@ -160,34 +172,35 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
 
-      expect(api.callCount(_view), 3);
+      expect(api.callCount(_start), 2);
+      // A retry of the same request, so the same key.
+      final keys = keysSentTo(api, _start);
+      expect(keys.first, keys.last);
+      expect(api.callCount(_complete), 1);
       expect(find.text('Congratulation!'), findsOneWidget);
     });
 
     testWidgets('a failed view is reported as not rewarded', (tester) async {
-      final api = adApi(
-        view: twoCallView(rawJson({'status': 'FAILED', 'rewardEarned': 0})),
-      );
+      final api = adApi(complete: [completed(status: 'FAILED')]);
       await open(tester, api, Routes.contentItem, 'ad-1');
       await watchToTheEnd(tester);
 
       expect(find.text('Not rewarded'), findsOneWidget);
     });
 
-    // Too early leaves the view started (§1.2): the completion may be sent
-    // again, as a new request.
+    // Too early leaves the view started: the completion may be sent again,
+    // as a new request.
     testWidgets('a completion sent too early can be sent again', (
       tester,
     ) async {
       final api = adApi(
-        view: [
-          rawJson({'status': 'STARTED'}),
+        complete: [
           apiError(
             'ILLEGAL_STATE',
             status: 500,
             message: 'Insufficient watch duration. Required: 24s, watched: 3s',
           ),
-          rawJson({'status': 'REWARDED', 'rewardEarned': 10}),
+          completed(status: 'REWARDED', earned: 10),
         ],
       );
       await open(tester, api, Routes.contentItem, 'ad-1');
@@ -208,20 +221,22 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Congratulation!'), findsOneWidget);
-      final keys = keysSentTo(api, _view);
-      expect(keys, hasLength(3));
-      expect(keys[1], isNot(keys[2]));
+      // Same view, not a new start.
+      expect(api.callCount(_start), 1);
+      final keys = keysSentTo(api, _complete);
+      expect(keys, hasLength(2));
+      expect(keys.first, isNot(keys.last));
     });
 
     testWidgets('says so when the ad has already paid out', (tester) async {
       final api = adApi(
-        view: twoCallView(
+        complete: [
           apiError(
             'ALREADY_CLAIMED',
             status: 409,
             message: 'You have already been rewarded for this ad',
           ),
-        ),
+        ],
       );
       await open(tester, api, Routes.contentItem, 'ad-1');
       await watchToTheEnd(tester);
@@ -233,12 +248,30 @@ void main() {
       expect(find.text('Try again'), findsNothing);
     });
 
+    for (final (code, message) in [
+      ('DAILY_VIEW_CAP_REACHED', 'This ad has had all its views for today.'),
+      ('OUTSIDE_DELIVERY_SCHEDULE', 'This ad is not shown at this hour.'),
+    ]) {
+      testWidgets('$code shows the server reason and is final', (tester) async {
+        final api = adApi(
+          start: [apiError(code, status: 409, message: message)],
+        );
+        await open(tester, api, Routes.contentItem, 'ad-1');
+
+        await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+        await tester.pumpAndSettle();
+
+        expect(find.text(message), findsOneWidget);
+        expect(find.text('Try again'), findsNothing);
+      });
+    }
+
     // A 403 that is a campaign rule, not an expired session.
     testWidgets('an audience refusal shows the reason and keeps the session', (
       tester,
     ) async {
       final api = adApi(
-        view: [
+        start: [
           apiError(
             'NOT_IN_TARGET_AUDIENCE',
             status: 403,
@@ -269,7 +302,7 @@ void main() {
       expect(find.text('Watch till the end'), findsOneWidget);
       await watchToTheEnd(tester);
 
-      expect(bodiesSentTo(api, _view).last['watchedDurationSeconds'], 3);
+      expect(api.bodyOf(_complete), {'watchedDurationSeconds': 3});
       expect(find.text('Congratulation!'), findsOneWidget);
     });
 
@@ -281,7 +314,7 @@ void main() {
 
       expect(find.text('You have already completed this one.'), findsOneWidget);
       expect(find.text('Watch till the end'), findsNothing);
-      expect(api.callCount(_view), 0);
+      expect(api.callCount(_start), 0);
     });
 
     testWidgets('an unavailable item shows the server reason', (tester) async {
@@ -295,13 +328,13 @@ void main() {
       await open(tester, api, Routes.contentItem, 'ad-1');
 
       expect(find.text('This campaign has run out of budget.'), findsOneWidget);
-      expect(api.callCount(_view), 0);
+      expect(api.callCount(_start), 0);
     });
   });
 
-  // Quizzes and surveys of a campaign: the media first, its view in two
-  // calls, then the questions, submitted once to `/quizzes/submit` or
-  // `/surveys/submit`.
+  // Quizzes and surveys of a campaign: the media first, its view started and
+  // completed, then the questions, submitted once to the same view's
+  // `/answers`.
   group('with questions', () {
     const discount = {
       'id': 'q1',
@@ -326,18 +359,12 @@ void main() {
       ],
     };
 
-    const awaitingAnswers = (
-      status: 200,
-      body: {'status': 'COMPLETED', 'awaitingAnswers': true, 'rewardEarned': 0},
-    );
-
     FakeApi questionApi({
       String kind = 'QUIZ',
       String progress = 'NOT_STARTED',
       List<Map<String, dynamic>> questions = const [discount],
-      List<FakeReply>? view,
-      List<FakeReply>? quiz,
-      FakeReply? survey,
+      List<FakeReply>? complete,
+      List<FakeReply>? answers,
     }) {
       final item = contentItem(
         kind: kind,
@@ -351,26 +378,21 @@ void main() {
             'item': item,
             'questions': questions,
           }),
-          'POST /surveys/submit':
-              survey ??
-              rawJson({
-                'passed': true,
-                'totalQuestions': questions.length,
-                'rewardEarned': 10,
-              }),
         },
         sequences: {
-          _view: view ?? twoCallView(awaitingAnswers),
-          'POST /quizzes/submit':
-              quiz ??
+          _start: [started()],
+          _complete: complete ?? [completed(awaitingAnswers: true)],
+          _answers:
+              answers ??
               [
-                rawJson({
+                ok({
                   'passed': true,
-                  'score': 1,
-                  'totalQuestions': 1,
+                  'score': questions.length,
+                  'totalQuestions': questions.length,
                   'rewardEarned': 10,
                   'cashbackPromised': 0,
-                }),
+                  'cashback': [],
+                }, message: 'Answers submitted'),
               ],
         },
       );
@@ -395,14 +417,10 @@ void main() {
       );
       await watchToTheEnd(tester);
 
-      // Both view calls went first, with no answer in them.
-      final views = bodiesSentTo(api, _view);
-      expect(views, hasLength(2));
-      expect(
-        views.last.keys,
-        unorderedEquals(['watchedDurationSeconds', 'deviceId']),
-      );
-      expect(api.callCount('POST /quizzes/submit'), 0);
+      // The view was started and completed first, with no answer in it.
+      expect(api.callCount(_start), 1);
+      expect(api.bodyOf(_complete), {'watchedDurationSeconds': 3});
+      expect(api.callCount(_answers), 0);
 
       // Ordered by orderIndex, not by arrival; every question is required.
       expect(find.text('Question 1 of 2'), findsOneWidget);
@@ -424,25 +442,24 @@ void main() {
 
       await answerOne(tester, 'Regal');
 
-      expect(api.bodyOf('POST /quizzes/submit'), {
-        'adId': 'ad-1',
+      // The view names the ad, so the body carries no adId.
+      expect(api.bodyOf(_answers), {
         'answers': [
           {'questionId': 'q1', 'optionId': 'p15'},
           {'questionId': 'q2', 'optionId': 'regal'},
         ],
       });
-      expect(keysSentTo(api, 'POST /quizzes/submit').single, isNotNull);
-      expect(api.callCount('POST /surveys/submit'), 0);
+      expect(keysSentTo(api, _answers).single, isNotNull);
       expect(find.text('Congratulation!'), findsOneWidget);
       expect(find.textContaining('Your answers are correct'), findsOneWidget);
-      expect(find.textContaining('৳10.00 has been added'), findsOneWidget);
+      expect(find.textContaining('You earned ৳10.00.'), findsOneWidget);
     });
 
     // One submission per item: a failed quiz is done for good.
     testWidgets('a wrong answer ends the quiz without a retry', (tester) async {
       final api = questionApi(
-        quiz: [
-          rawJson({'passed': false, 'score': 0, 'rewardEarned': 0}),
+        answers: [
+          ok({'passed': false, 'score': 0, 'rewardEarned': 0}),
         ],
       );
       await open(tester, api, Routes.contentItem, 'ad-1');
@@ -462,9 +479,9 @@ void main() {
       tester,
     ) async {
       final api = questionApi(
-        quiz: [
+        answers: [
           (status: 503, body: {'success': false, 'message': 'Down'}),
-          rawJson({'passed': true, 'score': 1, 'rewardEarned': 10}),
+          ok({'passed': true, 'score': 1, 'rewardEarned': 10}),
         ],
       );
       await open(tester, api, Routes.contentItem, 'ad-1');
@@ -476,14 +493,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Congratulation!'), findsOneWidget);
-      final keys = keysSentTo(api, 'POST /quizzes/submit');
+      final keys = keysSentTo(api, _answers);
       expect(keys, hasLength(2));
       expect(keys.first, keys.last);
     });
 
     testWidgets('an item done elsewhere says so and is final', (tester) async {
       final api = questionApi(
-        quiz: [
+        answers: [
           apiError(
             'DUPLICATE_PARTICIPATION',
             status: 409,
@@ -501,12 +518,12 @@ void main() {
 
     testWidgets('a refused answer goes back to the questions', (tester) async {
       final api = questionApi(
-        quiz: [
+        answers: [
           apiError(
             'INVALID_ANSWER',
             message: 'Question q1 has an option that is not one of its own',
           ),
-          rawJson({'passed': true, 'score': 1, 'rewardEarned': 10}),
+          ok({'passed': true, 'score': 1, 'rewardEarned': 10}),
         ],
       );
       await open(tester, api, Routes.contentItem, 'ad-1');
@@ -526,14 +543,15 @@ void main() {
       await press(tester, 'Submit');
 
       expect(find.text('Congratulation!'), findsOneWidget);
-      final keys = keysSentTo(api, 'POST /quizzes/submit');
+      final keys = keysSentTo(api, _answers);
       expect(keys.first, isNot(keys.last));
-      // The view is not sent again.
-      expect(api.callCount(_view), 2);
+      // The view is not started or completed again.
+      expect(api.callCount(_start), 1);
+      expect(api.callCount(_complete), 1);
     });
 
     testWidgets('a refused view never reaches the questions', (tester) async {
-      final api = questionApi(view: twoCallView(rawJson({'status': 'FAILED'})));
+      final api = questionApi(complete: [completed(status: 'FAILED')]);
       await open(tester, api, Routes.contentItem, 'ad-1');
       await watchToTheEnd(tester);
 
@@ -542,14 +560,34 @@ void main() {
         find.text('What was the percentage of discount on the Ad?'),
         findsNothing,
       );
-      expect(api.callCount('POST /quizzes/submit'), 0);
+      expect(api.callCount(_answers), 0);
     });
 
-    testWidgets('answers pending opens straight on the questions', (
+    // Answers go to the view they belong to, which only this device knows.
+    testWidgets('keeps the view until its answers are in', (tester) async {
+      final api = questionApi();
+      await open(tester, api, Routes.contentItem, 'ad-1');
+      await watchToTheEnd(tester);
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('pending_ad_view.ad-1'), 'v-1');
+
+      await answerOne(tester, '15%');
+      expect(find.text('Congratulation!'), findsOneWidget);
+      expect(prefs.getString('pending_ad_view.ad-1'), isNull);
+    });
+
+    testWidgets('answers pending opens straight on the kept view', (
       tester,
     ) async {
       final api = questionApi(progress: 'ANSWERS_PENDING');
-      await open(tester, api, Routes.contentItem, 'ad-1');
+      await open(
+        tester,
+        api,
+        Routes.contentItem,
+        'ad-1',
+        prefs: {'pending_ad_view.ad-1': 'v-1'},
+      );
 
       expect(find.text('Watch till the end'), findsNothing);
       expect(
@@ -558,13 +596,55 @@ void main() {
       );
       await answerOne(tester, '15%');
 
-      expect(api.callCount(_view), 0);
+      expect(api.callCount(_start), 0);
+      expect(api.callCount(_complete), 0);
+      expect(api.callCount(_answers), 1);
       expect(find.text('Congratulation!'), findsOneWidget);
     });
 
-    testWidgets('a survey sends every answer to /surveys/submit', (
+    testWidgets('answers pending without a kept view watches again', (
       tester,
     ) async {
+      final api = questionApi(progress: 'ANSWERS_PENDING');
+      await open(tester, api, Routes.contentItem, 'ad-1');
+
+      expect(find.text('Watch till the end'), findsOneWidget);
+      await watchToTheEnd(tester);
+      expect(api.callCount(_start), 1);
+      expect(
+        find.text('What was the percentage of discount on the Ad?'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('an answer refused for good forgets the kept view', (
+      tester,
+    ) async {
+      final api = questionApi(
+        progress: 'ANSWERS_PENDING',
+        answers: [
+          apiError(
+            'ILLEGAL_STATE',
+            status: 500,
+            message: 'Ad view does not belong to the caller',
+          ),
+        ],
+      );
+      await open(
+        tester,
+        api,
+        Routes.contentItem,
+        'ad-1',
+        prefs: {'pending_ad_view.ad-1': 'v-1'},
+      );
+      await answerOne(tester, '15%');
+
+      expect(find.text('Try again'), findsNothing);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('pending_ad_view.ad-1'), isNull);
+    });
+
+    testWidgets('a survey sends every answer to the view', (tester) async {
       final api = questionApi(
         kind: 'SURVEY',
         questions: [
@@ -597,14 +677,12 @@ void main() {
       await tester.pumpAndSettle();
       await press(tester, 'Submit');
 
-      expect(api.bodyOf('POST /surveys/submit'), {
-        'adId': 'ad-1',
+      expect(api.bodyOf(_answers), {
         'answers': [
           {'questionId': 's1', 'textAnswer': '4'},
           {'questionId': 's2', 'textAnswer': 'Clear and short'},
         ],
       });
-      expect(api.callCount('POST /quizzes/submit'), 0);
       expect(find.text('Congratulation!'), findsOneWidget);
       expect(find.textContaining('Thanks for your feedback'), findsOneWidget);
     });
@@ -623,8 +701,8 @@ void main() {
             'purchaseWindowDays': 7,
           },
         ],
-        quiz: [
-          rawJson({
+        answers: [
+          ok({
             'passed': true,
             'rewardEarned': 0,
             'cashbackPromised': 50,
@@ -714,7 +792,8 @@ void main() {
         'GET /mobile/content/ad-1': ok({'item': ad, 'questions': []}),
       },
       sequences: {
-        _view: twoCallView(rawJson({'status': 'REWARDED', 'rewardEarned': 10})),
+        _start: [started()],
+        _complete: [completed(status: 'REWARDED', earned: 10)],
       },
     );
 

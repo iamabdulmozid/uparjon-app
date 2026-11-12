@@ -10,10 +10,12 @@ void main() {
     expect(actual.isAtSameMomentAs(expected), isTrue, reason: '$actual');
   }
 
-  test('a zone-less timestamp is read as UTC', () {
+  // Mobile API changes 2026-11-11 §7: no offset means Asia/Dhaka (UTC+6),
+  // whatever zone the device is in.
+  test('a zone-less timestamp is read as Dhaka time', () {
     expectMoment(
-      ServerTime.parse('2026-10-01T18:45:27.554528'),
-      DateTime.utc(2026, 10, 1, 18, 45, 27, 554, 528),
+      ServerTime.parse('2026-11-11T14:30:00.554528'),
+      DateTime.utc(2026, 11, 11, 8, 30, 0, 554, 528),
     );
   });
 

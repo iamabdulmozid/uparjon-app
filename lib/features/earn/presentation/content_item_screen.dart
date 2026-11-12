@@ -25,23 +25,25 @@ import 'widgets/preparing_view.dart';
 
 /// Runs one campaign item — ad, quiz or survey — from the Ads/Quiz/Survey
 /// lists or the campaign screen (Figma V3 "Watch Ad": media → question →
-/// "Verifying" → "Congratulation!" / "Wrong Answer!"), per
-/// `docs/API Docs V2/mobile-api-changes-2026-10-11.md`.
+/// "Verifying" → "Congratulation!" / "Wrong Answer!"), per the ad-view flow
+/// of `docs/API Docs V3/document.pdf` (Mobile API changes 2026-11-11 §1).
 ///
 /// The item comes from `GET /mobile/content/{id}`. Its media cannot be
-/// skipped — the only controls are play/pause and mute — and the view is
-/// recorded in two calls to `POST /mobile/ads/{id}/view`:
+/// skipped — the only controls are play/pause and mute — and it is earned
+/// through `/ad-views/*`:
 ///
-/// 1. when the user first presses play, which opens the view and pays
-///    nothing. Playback waits for it, so the server's clock is running for
-///    at least as long as the media plays;
-/// 2. when the media ends. A plain ad is paid here. An item with questions
-///    comes back `awaitingAnswers`; its questions are walked one at a time
-///    and submitted once, which is what pays.
+/// 1. `start` when the user first presses play. It pays nothing and hands
+///    back the `adViewId` the later steps take. Playback waits for it, so
+///    the server's clock runs for at least as long as the media plays;
+/// 2. `complete` when the media ends. A plain ad is paid here. An item with
+///    questions comes back `awaitingAnswers`;
+/// 3. `answers`: the questions, walked one at a time and submitted once,
+///    which is what pays.
 ///
-/// An item whose view already counted (`ANSWERS_PENDING`) opens straight on
-/// its questions. Standalone quizzes and surveys never come here — they have
-/// no media and their own screens.
+/// An item already watched (`ANSWERS_PENDING`) opens straight on its
+/// questions when this device kept its `adViewId`; otherwise the media plays
+/// again. Standalone quizzes and surveys never come here — they have no
+/// media and their own screens.
 class ContentItemScreen extends ConsumerStatefulWidget {
   const ContentItemScreen({super.key, required this.itemId});
 
@@ -61,11 +63,12 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
   String? _loadError;
   VideoPlaybackState? _finalState;
 
-  /// The first view call is in flight.
+  /// `start` is in flight.
   bool _starting = false;
 
-  /// The server answered the first view call — playback may run.
-  bool _viewOpen = false;
+  /// The view the server opened for this watch — playback may run once it
+  /// is set.
+  String? _adViewId;
 
   /// Outcome of the view alone — set for items without questions, or when
   /// the server refused the view outright.
@@ -122,11 +125,13 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
   void _adopt(ContentDetail detail) {
     if (_detail != null) return;
     setState(() => _detail = detail);
-    if (detail.item.progress == ContentProgress.answersPending &&
-        detail.questions.isNotEmpty) {
-      // The view already counted; showing the media again would only delay
-      // the questions.
+    final pending = detail.item.progress == ContentProgress.answersPending
+        ? _repo.pendingAdView(detail.item.id)
+        : null;
+    if (pending != null && detail.questions.isNotEmpty) {
+      // Watched already; the answers go to that same view.
       setState(() {
+        _adViewId = pending;
         _questionsOpen = true;
         _phase = _Phase.question;
       });
@@ -188,7 +193,7 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
   /// The play button. The first press opens the view on the server before
   /// any media plays.
   void _play() {
-    if (_viewOpen) {
+    if (_adViewId != null) {
       unawaited(_playback!.play());
     } else {
       unawaited(_startView());
@@ -199,18 +204,15 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
     if (_starting) return;
     setState(() => _starting = true);
     try {
-      final view = await _repo.startView(
+      final session = await _repo.startAdView(
         itemId: _item.id,
         idempotencyKey: _startKey ??= Ids.newId(),
       );
       if (!mounted) return;
-      setState(() => _starting = false);
-      if (!view.isStarted) {
-        // Counted already, from an earlier visit.
-        _onViewCounted(view);
-        return;
-      }
-      _viewOpen = true;
+      setState(() {
+        _starting = false;
+        _adViewId = session.adViewId;
+      });
       unawaited(_playback!.play());
     } catch (error) {
       if (mounted) setState(() => _starting = false);
@@ -233,8 +235,9 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
   Future<void> _completeView() async {
     _enter(_hasQuestions ? _Phase.recording : _Phase.verifying);
     try {
-      final view = await _repo.completeView(
+      final view = await _repo.completeAdView(
         itemId: _item.id,
+        adViewId: _adViewId!,
         watchedSeconds: _watchedSeconds,
         idempotencyKey: _completeKey ??= Ids.newId(),
       );
@@ -263,6 +266,7 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
     try {
       final assessment = await _repo.submitAnswers(
         item: _item,
+        adViewId: _adViewId!,
         // The server wants exactly one answer per question; Next stays
         // disabled until each has one.
         answers: [for (final question in _questions) _answers[question.id]!],
@@ -271,6 +275,11 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
       if (!mounted) return;
       _finish(assessment: assessment);
     } catch (error) {
+      // Refused for good (done already, the view is not usable): there is
+      // nothing left to send the answers to later.
+      if (Failure.from(error) is BusinessFailure) {
+        unawaited(_repo.forgetPendingAdView(_item.id));
+      }
       _fail(error, retry: _submitAnswers);
     }
   }
@@ -489,13 +498,9 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
           ? AppAssets.illustrationCongratulations
           : AppAssets.illustrationNotRewarded,
       title: rewarded ? 'Congratulation!' : 'Not rewarded',
-      message: !rewarded
-          ? "This view didn't qualify for a reward this time."
-          : paid != null && paid > 0
-          ? 'You watched the full ad. ${Formatters.taka(paid)} has been '
-                'added to your wallet.'
-          : 'You watched the full ad. Your reward will be added to your '
-                'wallet.',
+      message: rewarded
+          ? 'You watched the full ad. ${_earnedLine(paid)}'
+          : "This view didn't qualify for a reward this time.",
       actionLabel: 'Continue',
       onAction: () => context.pop(),
       onClose: () => context.pop(),
@@ -562,13 +567,10 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
           : assessment.passed
           ? '$yourAnswer correct.'
           : null;
-      final reward = assessment.earned
-          ? '${Formatters.taka(paid!)} has been added to your wallet.'
-          : 'Your reward will be added to your wallet.';
       return EarnPopup(
         illustration: AppAssets.illustrationCongratulations,
         title: 'Congratulation!',
-        message: [?lead, reward, ?cashback].join(' '),
+        message: [?lead, _earnedLine(paid), ?cashback].join(' '),
         actionLabel: 'Continue',
         onAction: () => context.pop(),
         onClose: () => context.pop(),
@@ -597,6 +599,17 @@ class _ContentItemScreenState extends ConsumerState<ContentItemScreen>
       onAction: () => context.pop(),
       onClose: () => context.pop(),
     );
+  }
+
+  /// A reward may be held for review instead of paid at once, and the reply
+  /// looks the same either way (Mobile API changes 2026-11-11 §5) — so never
+  /// promise it is already spendable.
+  static String _earnedLine(num? paid) {
+    final lead = paid != null && paid > 0
+        ? 'You earned ${Formatters.taka(paid)}.'
+        : 'Your reward is on its way.';
+    return '$lead Some rewards are reviewed first and show as pending in '
+        'your wallet.';
   }
 
   /// "Buy the product by … to get ৳X cashback." — promised, paid only after

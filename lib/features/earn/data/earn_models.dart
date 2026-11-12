@@ -36,8 +36,7 @@ enum ContentKind {
 
 /// Which endpoints open and submit an item.
 enum ContentSource {
-  /// Part of a campaign: viewed with `/mobile/ads/{id}/view`, answered with
-  /// `/quizzes/submit` or `/surveys/submit`.
+  /// Part of a campaign: earned through the ad-view flow, `/ad-views/*`.
   campaign,
 
   /// A quiz or survey that belongs to no campaign: opened and submitted
@@ -116,6 +115,7 @@ class ContentItem {
     this.campaignTitle,
     this.campaignBannerUrl,
     this.campaignEndAt,
+    this.destinationUrl,
   });
 
   final String id;
@@ -155,6 +155,9 @@ class ContentItem {
   /// Null means the campaign has no end date.
   final DateTime? campaignEndAt;
 
+  /// The advertiser's link, opened through `POST /ad-views/{id}/click`.
+  final String? destinationUrl;
+
   bool get isCompleted => progress == ContentProgress.completed;
   bool get isStandalone => source == ContentSource.standalone;
   bool get isSurvey => kind == ContentKind.survey;
@@ -188,6 +191,7 @@ class ContentItem {
     campaignTitle: json['campaignTitle'] as String?,
     campaignBannerUrl: json['campaignBannerUrl'] as String?,
     campaignEndAt: ServerTime.parse(json['campaignEndAt']),
+    destinationUrl: json['destinationUrl'] as String?,
   );
 }
 
@@ -316,11 +320,11 @@ class CashbackPromise {
       );
 }
 
-/// Outcome of answering a campaign item (`POST /quizzes/submit` or
-/// `/surveys/submit`, both un-enveloped and untyped in the OpenAPI).
+/// Outcome of answering a campaign item
+/// (`POST /ad-views/{adViewId}/answers`).
 ///
 /// There is one submission per item: a failed quiz is still done, with no
-/// reward, and cannot be retried.
+/// reward (`200`, `passed: false`), and cannot be retried.
 class AdAssessment {
   const AdAssessment({
     required this.passed,
@@ -336,8 +340,9 @@ class AdAssessment {
   final int? score;
   final int? totalQuestions;
 
-  /// Paid to the wallet now. A per-question item can pay something even when
-  /// [passed] is false.
+  /// What this earned. It may be held for review before it reaches the
+  /// available balance — the reply looks the same either way. A
+  /// per-question item can earn something even when [passed] is false.
   final num? rewardEarned;
 
   /// Promised for buying a product later — not paid yet, so never "earned".
@@ -387,12 +392,28 @@ enum AdViewStatus {
   };
 }
 
-/// A view of a campaign item (`AdViewResponse`, un-enveloped).
+/// A view just opened by `POST /ad-views/start`, when playback begins. The
+/// server measures watch time from here.
+class AdViewSession {
+  const AdViewSession({required this.adViewId, this.startedAt});
+
+  /// Every later step of the flow — complete, answers, click — takes it.
+  final String adViewId;
+  final DateTime? startedAt;
+
+  factory AdViewSession.fromJson(Map<String, dynamic> json) => AdViewSession(
+    adViewId: (json['adViewId'] ?? json['id'])?.toString() ?? '',
+    startedAt: ServerTime.parse(json['startedAt']),
+  );
+}
+
+/// A completed view (`AdViewResponse`, from
+/// `POST /ad-views/{adViewId}/complete`).
 ///
-/// `POST /mobile/ads/{id}/view` is called twice: once when the media starts,
-/// which answers [AdViewStatus.started] and pays nothing, and again when it
-/// ends. The second call pays a plain ad ([AdViewStatus.rewarded]) or, for an
-/// item with questions, completes the view with [awaitingAnswers] set.
+/// A plain ad comes back [AdViewStatus.rewarded] — the reward is settled,
+/// though it may be held for review. An item with questions comes back
+/// [AdViewStatus.completed] with [awaitingAnswers] set, and nothing is paid
+/// until the answers are in.
 class AdView {
   const AdView({
     required this.status,
@@ -415,8 +436,6 @@ class AdView {
 
   /// The view counted; the reward now comes from submitting the answers.
   final bool awaitingAnswers;
-
-  bool get isStarted => status == AdViewStatus.started;
 
   /// `rewardEligible` is deliberately not read: the server sets it on views
   /// that pay nothing, such as a quiz's.
@@ -750,8 +769,8 @@ class SurveyAnswer {
 }
 
 /// A completed task's reward (`RewardHistoryItem`,
-/// `GET /mobile/rewards/history`). Sits `PENDING` until fraud validation
-/// clears it, then is credited to the wallet.
+/// `GET /mobile/rewards/history`): `PENDING` while it is held for review,
+/// then `APPROVED` and credited, or `REJECTED`.
 class RewardHistoryItem {
   const RewardHistoryItem({
     required this.rewardId,
@@ -767,7 +786,11 @@ class RewardHistoryItem {
   final num? rewardAmount;
   final DateTime? rewardedAt;
 
+  /// Held for review — not a failure, and not in the balance yet.
   bool get isPending => status.toUpperCase() == 'PENDING';
+
+  /// Turned down after review; never paid.
+  bool get isRejected => status.toUpperCase() == 'REJECTED';
 
   factory RewardHistoryItem.fromJson(Map<String, dynamic> json) =>
       RewardHistoryItem(

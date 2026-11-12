@@ -77,6 +77,8 @@ sealed class Failure {
       ApiErrorCodes.campaignEnded ||
       ApiErrorCodes.campaignInactive ||
       ApiErrorCodes.campaignBudgetExhausted ||
+      ApiErrorCodes.outsideDeliverySchedule ||
+      ApiErrorCodes.dailyViewCapReached ||
       ApiErrorCodes.participantTargetReached ||
       ApiErrorCodes.productIneligible ||
       ApiErrorCodes.notInTargetAudience => BusinessFailure(

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/device/device_identity.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/storage/local_store.dart';
 import '../../../core/utils/ids.dart';
 import 'earn_models.dart';
 
@@ -9,20 +10,22 @@ final earnRepositoryProvider = Provider<EarnRepository>(
   (ref) => EarnRepository(
     ref.watch(apiClientProvider),
     ref.watch(deviceIdentityProvider),
+    ref.watch(localStoreProvider),
   ),
 );
 
-/// Talks to the campaign and content endpoints of the `02 Mobile` group
-/// (`docs/API Docs V2/mobile-api-changes-2026-10-11.md`), plus the stats the
-/// earning screens show around them.
+/// Talks to the campaign, content and ad-view endpoints
+/// (`docs/API Docs V3/document.pdf`, Mobile API changes 2026-11-11), plus
+/// the stats the earning screens show around them.
 ///
 /// Reward-producing writes carry an `Idempotency-Key` so a retry after a
 /// dropped connection cannot credit the user twice.
 class EarnRepository {
-  EarnRepository(this._api, this._device);
+  EarnRepository(this._api, this._device, this._store);
 
   final ApiClient _api;
   final DeviceIdentity _device;
+  final LocalStore _store;
 
   // ---------------------------------------------------------------- campaigns
 
@@ -82,71 +85,86 @@ class EarnRepository {
     return ContentDetail.fromJson((data as Map).cast<String, dynamic>());
   }
 
-  /// `POST /mobile/ads/{id}/view`, first call — opens the view when the
-  /// media starts. Pays nothing.
-  ///
-  /// The server times the gap to [completeView]: at least 80% of the item's
-  /// `durationSeconds` (less a 2 s grace) must really pass in between.
-  Future<AdView> startView({
+  // --------------------------------------------------------------- ad views
+
+  // The one way to earn a campaign item (Mobile API changes 2026-11-11 §1):
+  // start when the media starts, complete when it ends, answers when the
+  // item has questions.
+
+  /// `POST /ad-views/start` — opens a view of item [itemId] (its ad id) when
+  /// playback really begins. Pays nothing; the server measures watch time
+  /// from this call.
+  Future<AdViewSession> startAdView({
     required String itemId,
     required String idempotencyKey,
-  }) => _postView(itemId, watchedSeconds: 0, idempotencyKey: idempotencyKey);
+  }) async {
+    final data = await _api.post(
+      '/ad-views/start',
+      data: {'adId': itemId, 'deviceId': _device.id},
+      idempotencyKey: idempotencyKey,
+    );
+    return AdViewSession.fromJson((data as Map).cast<String, dynamic>());
+  }
 
-  /// `POST /mobile/ads/{id}/view`, second call — completes the view once the
-  /// media has been watched. A plain ad is paid here; an item with
-  /// questions comes back `awaitingAnswers` and is paid by [submitAnswers].
+  /// `POST /ad-views/{adViewId}/complete` — once the media has been watched.
+  /// A plain ad is paid here; an item with questions comes back
+  /// `awaitingAnswers` and is paid by [submitAnswers].
   ///
-  /// Too early answers `500 ILLEGAL_STATE` ("Insufficient watch
-  /// duration…") and leaves the view started, so the same call can be made
-  /// again later — with a fresh [idempotencyKey], or the server would replay
-  /// the refusal.
-  Future<AdView> completeView({
+  /// At least 80% of the item's `durationSeconds` must have been watched,
+  /// and must really have passed since [startAdView]; otherwise
+  /// `500 ILLEGAL_STATE` ("Insufficient watch duration…"). Retry that with a
+  /// fresh [idempotencyKey], or the server would replay the refusal.
+  Future<AdView> completeAdView({
     required String itemId,
-    required int watchedSeconds,
-    required String idempotencyKey,
-  }) => _postView(
-    itemId,
-    watchedSeconds: watchedSeconds,
-    idempotencyKey: idempotencyKey,
-  );
-
-  Future<AdView> _postView(
-    String itemId, {
+    required String adViewId,
     required int watchedSeconds,
     required String idempotencyKey,
   }) async {
     final data = await _api.post(
-      '/mobile/ads/$itemId/view',
-      data: {'watchedDurationSeconds': watchedSeconds, 'deviceId': _device.id},
+      '/ad-views/$adViewId/complete',
+      data: {'watchedDurationSeconds': watchedSeconds},
       idempotencyKey: idempotencyKey,
     );
-    return AdView.fromJson((data as Map).cast<String, dynamic>());
+    final view = AdView.fromJson((data as Map).cast<String, dynamic>());
+    // Kept so the answers can still be sent if the user leaves first.
+    if (view.awaitingAnswers) {
+      await _store.setPendingAdView(itemId, adViewId);
+    }
+    return view;
   }
 
-  /// `POST /quizzes/submit` (graded) or `POST /surveys/submit` — answers a
-  /// campaign item once its view has completed. One submission per item.
+  /// The completed view [itemId]'s answers are still owed to, if this
+  /// device recorded one.
+  String? pendingAdView(String itemId) => _store.pendingAdView(itemId);
+
+  /// `POST /ad-views/{adViewId}/answers` — answers a campaign item once its
+  /// view has completed. One submission per item.
   ///
   /// Every question must be answered exactly once, or the server refuses with
   /// `400 INVALID_ANSWER`. Pass the same [idempotencyKey] when retrying one
   /// submission after a dropped connection.
   Future<AdAssessment> submitAnswers({
     required ContentItem item,
+    required String adViewId,
     required List<SurveyAnswer> answers,
     required String idempotencyKey,
   }) async {
     final data = await _api.post(
-      item.isSurvey ? '/surveys/submit' : '/quizzes/submit',
-      data: {
-        'adId': item.id,
-        'answers': answers.map((a) => a.toJson()).toList(),
-      },
+      '/ad-views/$adViewId/answers',
+      data: {'answers': answers.map((a) => a.toJson()).toList()},
       idempotencyKey: idempotencyKey,
     );
+    await forgetPendingAdView(item.id);
     return AdAssessment.fromJson(
       data is Map ? data.cast<String, dynamic>() : const {},
       passedByDefault: item.isSurvey,
     );
   }
+
+  /// Drops the kept view once its answers can no longer be sent — answered,
+  /// or refused for good.
+  Future<void> forgetPendingAdView(String itemId) =>
+      _store.clearPendingAdView(itemId);
 
   Future<Paged<ContentItem>> _contentPage(
     String path,
@@ -250,7 +268,8 @@ class EarnRepository {
 
   // ------------------------------------------------------------------ shared
 
-  /// Handles both the bare-array and enveloped-list shapes the API mixes.
+  /// A plain list in `data`. [ApiClient] has already unwrapped the
+  /// envelope, which every `/mobile/**` endpoint now sends.
   Future<List<T>> _cardList<T>(
     String path,
     T Function(Map<String, dynamic>) fromJson,

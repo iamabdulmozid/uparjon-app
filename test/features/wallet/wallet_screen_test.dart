@@ -106,7 +106,7 @@ void main() {
     );
 
     expect(find.text('৳15.00 pending'), findsOneWidget);
-    expect(find.text('Pending verification'), findsOneWidget);
+    expect(find.text('Under review'), findsOneWidget);
   });
 
   // The server books an ad reward twice: REWARD_PENDING when the view is

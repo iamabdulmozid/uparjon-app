@@ -58,11 +58,11 @@ void main() {
 {"id":"727f04ea-00ba-46c9-a7f4-c1fab95440eb","type":"BONUS","amount":30.0000,
 "status":"COMPLETED","description":"Completed Survey: National Consumer Digital Financial Habits Survey 2026-2028 [Updated] 17897941198473658",
 "createdAt":"2026-09-20T14:26:05.417647"}],
-"empty":false,"first":true,"last":true,"number":0,"numberOfElements":1,
-"pageable":{"offset":0,"pageNumber":0,"pageSize":20,"paged":true},
-"size":20,"totalElements":1,"totalPages":1},
+"empty":false,"first":true,"last":true,"hasNext":false,"number":0,
+"numberOfElements":1,"size":20,"totalElements":1,"totalPages":1},
 "timestamp":"2026-09-20T15:13:32.823337648"}''';
 
+    // The 2026-11-11 page shape: no `pageable`, no `sort`.
     test('parses the live paged ledger', () {
       final page = Paged.fromJson(
         dataOf(liveTransactions),
@@ -78,10 +78,10 @@ void main() {
       expect(row.type, 'BONUS');
       expect(row.isDebit, isFalse);
       expect(row.isPending, isFalse);
-      // Sent as UTC without a zone.
+      // Sent without an offset: Dhaka time.
       expect(
         row.createdAt!.isAtSameMomentAs(
-          DateTime.parse('2026-09-20T14:26:05.417647Z'),
+          DateTime.parse('2026-09-20T14:26:05.417647+06:00'),
         ),
         isTrue,
       );

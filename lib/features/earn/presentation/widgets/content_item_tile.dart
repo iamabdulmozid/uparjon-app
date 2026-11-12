@@ -110,7 +110,7 @@ class ContentItemOverview extends StatelessWidget {
 
   List<String> get _rules => [
     if (item.progress == ContentProgress.answersPending)
-      'You already watched this — the questions open straight away'
+      'You already watched this — answer the questions to finish'
     else if (_hasMedia) ...[
       'Watch the $_media till the end',
       "You can't skip the $_media",

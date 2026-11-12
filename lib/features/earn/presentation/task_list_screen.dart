@@ -123,6 +123,7 @@ class TaskListScreen extends ConsumerWidget {
                       ? 'Reward'
                       : reward.campaignName,
                   pending: reward.isPending,
+                  rejected: reward.isRejected,
                   message: _completedMessage(kind, reward),
                   icon: kind.icon,
                   color: kind.color,
@@ -140,8 +141,11 @@ class TaskListScreen extends ConsumerWidget {
     final noun = kind.noun.toLowerCase();
     if (reward.isPending) {
       return amount == null
-          ? 'Completed! Your reward is pending verification'
-          : 'Completed! ${Formatters.taka(amount)} is pending verification';
+          ? 'Completed! Your reward is under review'
+          : 'Completed! ${Formatters.taka(amount)} is under review';
+    }
+    if (reward.isRejected) {
+      return 'Completed, but the reward was not approved after review';
     }
     return amount == null
         ? 'Completed this $noun successfully!'
